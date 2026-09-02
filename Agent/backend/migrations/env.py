@@ -51,22 +51,6 @@ def get_metadata():
     return target_db.metadata
 
 
-# This app shares a Postgres database with Merchant/backend. Autogenerate
-# diffs against every table in the target schema by default, which would
-# otherwise propose dropping every Merchant table this app doesn't own.
-# Restrict it to only the tables this app's migrations are allowed to touch.
-OWNED_TABLES = {'chat_sessions', 'chat_messages', 'selected_products'}
-
-
-def include_object(object, name, type_, reflected, compare_to):
-    if type_ == 'table':
-        return name in OWNED_TABLES
-    table = getattr(object, 'table', None)
-    if table is not None:
-        return table.name in OWNED_TABLES
-    return True
-
-
 def run_migrations_offline():
     """Run migrations in 'offline' mode.
 
@@ -81,8 +65,7 @@ def run_migrations_offline():
     """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url, target_metadata=get_metadata(), literal_binds=True,
-        include_object=include_object,
+        url=url, target_metadata=get_metadata(), literal_binds=True
     )
 
     with context.begin_transaction():
@@ -110,7 +93,6 @@ def run_migrations_online():
     conf_args = current_app.extensions['migrate'].configure_args
     if conf_args.get("process_revision_directives") is None:
         conf_args["process_revision_directives"] = process_revision_directives
-    conf_args.setdefault("include_object", include_object)
 
     connectable = get_engine()
 

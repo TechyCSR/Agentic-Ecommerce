@@ -5,9 +5,9 @@ from app.models.base import UUIDPrimaryKeyMixin, utcnow
 
 
 class AuditEvent(UUIDPrimaryKeyMixin, db.Model):
-    """Maps onto the audit_events table Phase 1 (Merchant) already owns and
-    migrated — this service writes into the same shared table rather than
-    creating a parallel one, so no migration creates this table here.
+    """This service's own audit_events table (own database, separate from
+    Merchant's) — same shape as Merchant's table so both services' audit
+    trails stay directly comparable, but each service owns its own rows.
     """
 
     __tablename__ = "audit_events"

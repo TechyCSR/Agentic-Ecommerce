@@ -11,7 +11,7 @@ def log_event(
     buyer_clerk_user_id=None,
     metadata=None,
 ):
-    """Writes into the same audit_events table Phase 1 (Merchant) uses.
+    """Writes into this service's own audit_events table.
 
     actor_id stays NULL — a Clerk id ("user_...") isn't a UUID, so the
     buyer identifier goes in metadata instead, alongside the chat session.

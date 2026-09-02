@@ -11,10 +11,7 @@ def create_app():
     app.config.from_object(get_config())
 
     db.init_app(app)
-    # A distinct version table — this app shares a database with
-    # Merchant/backend, which already owns the default `alembic_version`
-    # table for its own migration history.
-    migrate.init_app(app, db, version_table="alembic_version_agent")
+    migrate.init_app(app, db)
     cors.init_app(
         app,
         resources={r"/api/*": {"origins": app.config.get("FRONTEND_ORIGIN", "*")}},
