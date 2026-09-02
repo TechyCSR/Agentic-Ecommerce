@@ -41,15 +41,15 @@ export function useCreateSession() {
   });
 }
 
-export function useSendMessage(sessionId: string | undefined) {
+export function useSendMessage() {
   const api = useApi();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (text: string) =>
+    mutationFn: ({ sessionId, text }: { sessionId: string; text: string }) =>
       api.post<ChatMessage>(`/api/v1/chat/sessions/${sessionId}/messages`, { text }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chat-session", sessionId] });
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["chat-session", variables.sessionId] });
       queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
     },
   });
@@ -65,18 +65,26 @@ export function useSelection(sessionId: string | undefined) {
   });
 }
 
-export function useSelectProduct(sessionId: string | undefined) {
+export function useSelectProduct() {
   const api = useApi();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ productId, variantId }: { productId: string; variantId: string }) =>
+    mutationFn: ({
+      sessionId,
+      productId,
+      variantId,
+    }: {
+      sessionId: string;
+      productId: string;
+      variantId: string;
+    }) =>
       api.post<Selection>(`/api/v1/chat/sessions/${sessionId}/select`, {
         product_id: productId,
         variant_id: variantId,
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chat-selection", sessionId] });
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["chat-selection", variables.sessionId] });
     },
   });
 }

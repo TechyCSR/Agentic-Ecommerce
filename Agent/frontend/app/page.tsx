@@ -33,8 +33,8 @@ export default function ChatPage() {
 
   const { data: session, isLoading: sessionLoading } = useSession(activeId ?? undefined);
   const { data: selection } = useSelection(activeId ?? undefined);
-  const sendMessage = useSendMessage(activeId ?? undefined);
-  const selectProduct = useSelectProduct(activeId ?? undefined);
+  const sendMessage = useSendMessage();
+  const selectProduct = useSelectProduct();
 
   const [selectingProductId, setSelectingProductId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -53,27 +53,28 @@ export default function ChatPage() {
   }
 
   async function handleSend(text: string) {
-    if (!activeId) {
-      try {
+    try {
+      // Resolve the session id locally rather than relying on `activeId`
+      // state (setActiveId doesn't take effect until the next render, so
+      // reading `activeId` right after creating a session here would still
+      // see the old, unset value).
+      let sessionId = activeId;
+      if (!sessionId) {
         const created = await createSession.mutateAsync();
         setActiveId(created.id);
-        await sendMessage.mutateAsync(text);
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to send message");
+        sessionId = created.id;
       }
-      return;
-    }
-    try {
-      await sendMessage.mutateAsync(text);
+      await sendMessage.mutateAsync({ sessionId, text });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to send message");
     }
   }
 
   async function handleBuyNow(productId: string, variantId: string) {
+    if (!activeId) return;
     setSelectingProductId(productId);
     try {
-      await selectProduct.mutateAsync({ productId, variantId });
+      await selectProduct.mutateAsync({ sessionId: activeId, productId, variantId });
       toast.success("Added to checkout — ready when you are.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to select this product");
