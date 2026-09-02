@@ -47,6 +47,13 @@ def list_products():
     )
 
 
+@bp.route("/stats", methods=["GET"])
+@require_auth
+def product_stats():
+    stats = product_service.get_product_stats_for_user(g.current_user)
+    return success(stats)
+
+
 @bp.route("/<uuid:product_id>", methods=["GET"])
 @require_auth
 def get_product(product_id):

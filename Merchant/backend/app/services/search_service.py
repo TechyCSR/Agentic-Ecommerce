@@ -1,4 +1,5 @@
 from sqlalchemy import or_
+from sqlalchemy.orm import selectinload
 
 from app.models import Category, Product, ProductVariant, Store
 from app.models.enums import ProductStatus
@@ -60,7 +61,13 @@ def search_products(filters, limit, offset, require_agent_searchable=False):
 
     total = query.distinct().count()
     products = (
-        query.order_by(Product.created_at.desc())
+        query.options(
+            selectinload(Product.variants),
+            selectinload(Product.images),
+            selectinload(Product.categories),
+            selectinload(Product.store).selectinload(Store.merchant),
+        )
+        .order_by(Product.created_at.desc())
         .limit(limit)
         .offset(offset)
         .all()

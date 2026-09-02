@@ -1,12 +1,25 @@
+from sqlalchemy import func
+from sqlalchemy.orm import selectinload
+
 from app.extensions import db
-from app.models import InventoryMovement, Product, ProductImage, ProductVariant
+from app.models import InventoryMovement, Product, ProductImage, ProductVariant, Store
 from app.models.enums import ProductStatus
 from app.services import audit_service
 from app.services.category_service import resolve_categories
 from app.services.merchant_service import assert_owns_merchant
-from app.services.store_service import get_store_or_404
+from app.services.store_service import get_store_or_404, list_stores_for_user
 from app.utils.exceptions import NotFoundError, ValidationError
 from app.utils.slugify import unique_slug
+
+# Eager-load the relations to_dict() traverses so listing/reading products
+# doesn't fall into an N+1 query pattern (one extra round trip per relation,
+# per product, which is especially costly against a remote/serverless DB).
+_PRODUCT_EAGER_OPTIONS = (
+    selectinload(Product.variants),
+    selectinload(Product.images),
+    selectinload(Product.categories),
+    selectinload(Product.store).selectinload(Store.merchant),
+)
 
 
 def _slug_exists_in_store(store_id):
@@ -36,7 +49,7 @@ def _validate_variant_payload(variant_payload):
 
 
 def get_product_or_404(product_id):
-    product = Product.query.get(product_id)
+    product = Product.query.options(*_PRODUCT_EAGER_OPTIONS).get(product_id)
     if not product:
         raise NotFoundError("Product not found", code="PRODUCT_NOT_FOUND")
     return product
@@ -114,8 +127,6 @@ def create_product(user, store_id, payload):
 
 
 def list_products_for_user(user, filters, limit, offset):
-    from app.services.store_service import list_stores_for_user
-
     stores = list_stores_for_user(user)
     store_ids = [s.id for s in stores]
     if not store_ids:
@@ -133,9 +144,60 @@ def list_products_for_user(user, filters, limit, offset):
 
     total = query.count()
     products = (
-        query.order_by(Product.created_at.desc()).limit(limit).offset(offset).all()
+        query.options(*_PRODUCT_EAGER_OPTIONS)
+        .order_by(Product.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
     )
     return products, total
+
+
+def get_product_stats_for_user(user):
+    """Aggregate product/inventory counts via SQL instead of loading full
+    product rows — used by the dashboard overview, which only needs totals.
+    """
+    stores = list_stores_for_user(user)
+    store_ids = [s.id for s in stores]
+    if not store_ids:
+        return {
+            "total_products": 0,
+            "active_products": 0,
+            "out_of_stock_products": 0,
+            "total_inventory": 0,
+        }
+
+    total_products = Product.query.filter(Product.store_id.in_(store_ids)).count()
+    active_products = Product.query.filter(
+        Product.store_id.in_(store_ids), Product.status == ProductStatus.ACTIVE
+    ).count()
+
+    stock_per_product = (
+        db.session.query(
+            Product.id.label("product_id"),
+            func.coalesce(func.sum(ProductVariant.stock_quantity), 0).label("stock"),
+        )
+        .outerjoin(ProductVariant, ProductVariant.product_id == Product.id)
+        .filter(Product.store_id.in_(store_ids))
+        .group_by(Product.id)
+        .subquery()
+    )
+    total_inventory = db.session.query(
+        func.coalesce(func.sum(stock_per_product.c.stock), 0)
+    ).scalar()
+    out_of_stock_products = (
+        db.session.query(func.count())
+        .select_from(stock_per_product)
+        .filter(stock_per_product.c.stock == 0)
+        .scalar()
+    )
+
+    return {
+        "total_products": total_products,
+        "active_products": active_products,
+        "out_of_stock_products": out_of_stock_products,
+        "total_inventory": int(total_inventory or 0),
+    }
 
 
 def update_product(user, product_id, payload):
