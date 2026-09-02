@@ -20,7 +20,13 @@ from app.models.enums import MessageRole
 from app.services import audit_service, catalog_client
 
 MAX_TOOL_ITERATIONS = 6
-REQUEST_TIMEOUT_SECONDS = 30
+# Kept tight on purpose: this is a synchronous request/response chat, not a
+# streaming one, so a slow upstream directly stalls the buyer's browser.
+# One retry (not the SDK's default of two) trades a little resilience
+# against a transient blip for staying well inside gunicorn's worker
+# timeout even in the worst case (a few tool-calling iterations deep).
+REQUEST_TIMEOUT_SECONDS = 20
+LLM_MAX_RETRIES = 1
 
 FIXED_SEARCH_FAILURE_MESSAGE = (
     "I'm unable to search the catalog right now. Please try again."
@@ -153,6 +159,7 @@ def _client() -> OpenAI:
         base_url=current_app.config["LLM_BASE_URL"],
         api_key=current_app.config["LLM_API_KEY"],
         timeout=REQUEST_TIMEOUT_SECONDS,
+        max_retries=LLM_MAX_RETRIES,
     )
 
 
