@@ -1,0 +1,26 @@
+# --- Backend (Python/Flask) ---
+backend/.venv/
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/.env
+backend/instance/
+backend/.pytest_cache/
+backend/.ruff_cache/
+
+# --- Frontend (Next.js) ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/npm-debug.log*
+frontend/tsconfig.tsbuildinfo
+
+# --- General ---
+.DS_Store
+*.log
+.vscode/
+.idea/
