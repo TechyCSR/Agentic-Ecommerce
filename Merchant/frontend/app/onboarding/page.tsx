@@ -19,11 +19,16 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useCurrentUser } from "@/lib/queries/use-current-user";
 import { useCreateMerchant } from "@/lib/queries/use-merchant";
-import { useCreateStore } from "@/lib/queries/use-stores";
+import { useCreateStore, useStores } from "@/lib/queries/use-stores";
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { data: user, isLoading } = useCurrentUser();
+  const { data: user, isLoading: userLoading } = useCurrentUser();
+  const hasMerchant = !!user?.merchant;
+  // Only fetch stores once a merchant exists — the endpoint 404s otherwise.
+  const { data: stores, isLoading: storesLoading } = useStores({
+    enabled: hasMerchant,
+  });
   const createMerchant = useCreateMerchant();
   const createStore = useCreateStore();
 
@@ -43,11 +48,25 @@ export default function OnboardingPage() {
     country: "India",
   });
 
+  // Resume at step 2 if the merchant already exists (e.g. a page refresh
+  // mid-onboarding, or the merchant-create mutation refetching the user).
+  if (hasMerchant && step !== 2) {
+    setStep(2);
+  }
+
+  // Only leave onboarding once a store exists too — having a merchant alone
+  // isn't "done" and shouldn't skip past the store-creation step.
   useEffect(() => {
-    if (!isLoading && user?.merchant) {
+    if (
+      !userLoading &&
+      hasMerchant &&
+      !storesLoading &&
+      stores &&
+      stores.length > 0
+    ) {
       router.replace("/dashboard");
     }
-  }, [isLoading, user, router]);
+  }, [userLoading, hasMerchant, storesLoading, stores, router]);
 
   async function handleCreateMerchant(e: React.FormEvent) {
     e.preventDefault();
@@ -76,7 +95,7 @@ export default function OnboardingPage() {
     }
   }
 
-  if (isLoading) {
+  if (userLoading || (hasMerchant && storesLoading)) {
     return (
       <div className="flex h-screen w-full items-center justify-center">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -108,7 +127,9 @@ export default function OnboardingPage() {
           <form onSubmit={handleCreateMerchant}>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="business_name">Business name</Label>
+                <Label htmlFor="business_name">
+                  Business name <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="business_name"
                   required
@@ -121,7 +142,10 @@ export default function OnboardingPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="email">Business email</Label>
+                  <Label htmlFor="email">
+                    Business email{" "}
+                    <span className="text-muted-foreground">(optional)</span>
+                  </Label>
                   <Input
                     id="email"
                     type="email"
@@ -133,7 +157,9 @@ export default function OnboardingPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="phone">Phone</Label>
+                  <Label htmlFor="phone">
+                    Phone <span className="text-muted-foreground">(optional)</span>
+                  </Label>
                   <Input
                     id="phone"
                     value={merchantForm.phone}
@@ -145,7 +171,9 @@ export default function OnboardingPage() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="website_url">Website</Label>
+                <Label htmlFor="website_url">
+                  Website <span className="text-muted-foreground">(optional)</span>
+                </Label>
                 <Input
                   id="website_url"
                   value={merchantForm.website_url}
@@ -156,7 +184,10 @@ export default function OnboardingPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="description">Description</Label>
+                <Label htmlFor="description">
+                  Description{" "}
+                  <span className="text-muted-foreground">(optional)</span>
+                </Label>
                 <Textarea
                   id="description"
                   value={merchantForm.description}
@@ -181,7 +212,9 @@ export default function OnboardingPage() {
           <form onSubmit={handleCreateStore}>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="store_name">Store name</Label>
+                <Label htmlFor="store_name">
+                  Store name <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="store_name"
                   required
@@ -194,7 +227,9 @@ export default function OnboardingPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="currency">Currency</Label>
+                  <Label htmlFor="currency">
+                    Currency <span className="text-muted-foreground">(optional)</span>
+                  </Label>
                   <Input
                     id="currency"
                     value={storeForm.currency}
@@ -205,7 +240,9 @@ export default function OnboardingPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="country">Country</Label>
+                  <Label htmlFor="country">
+                    Country <span className="text-muted-foreground">(optional)</span>
+                  </Label>
                   <Input
                     id="country"
                     value={storeForm.country}

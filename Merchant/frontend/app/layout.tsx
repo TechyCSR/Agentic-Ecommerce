@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Agentic Commerce | Merchant Platform",
   description:
-    "Manage your store, catalog, and secure agent access on the Agentic Commerce Platform.",
+    "Commerce, made agent-readable. Manage your store, catalog, and secure agent access on the Agentic Commerce Platform.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

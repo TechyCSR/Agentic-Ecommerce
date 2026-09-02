@@ -13,6 +13,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 
+import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -41,9 +42,7 @@ export function Topbar() {
           <SheetContent side="left" className="w-64 p-0">
             <SheetTitle className="sr-only">Navigation</SheetTitle>
             <div className="flex h-16 items-center border-b px-6">
-              <span className="text-lg font-semibold tracking-tight">
-                Agentic Commerce
-              </span>
+              <Logo />
             </div>
             <nav className="space-y-1 p-4">
               {navItems.map((item) => {
@@ -71,9 +70,11 @@ export function Topbar() {
             </nav>
           </SheetContent>
         </Sheet>
-        <span className="text-sm font-medium text-muted-foreground md:hidden">
-          Agentic Commerce
-        </span>
+        <Logo
+          className="md:hidden"
+          markClassName="size-6"
+          textClassName="text-sm font-medium"
+        />
       </div>
       <div className="md:hidden">
         <UserButton />

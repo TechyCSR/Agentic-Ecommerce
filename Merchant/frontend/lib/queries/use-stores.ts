@@ -13,12 +13,13 @@ export interface StorePayload {
   country?: string;
 }
 
-export function useStores() {
+export function useStores(options?: { enabled?: boolean }) {
   const api = useApi();
 
   return useQuery({
     queryKey: ["stores"],
     queryFn: () => api.get<Store[]>("/api/v1/stores"),
+    enabled: options?.enabled,
   });
 }
 

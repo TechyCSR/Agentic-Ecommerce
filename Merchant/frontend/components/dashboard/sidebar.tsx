@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { Logo } from "@/components/brand/logo";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -27,9 +28,7 @@ export function Sidebar() {
   return (
     <aside className="hidden w-64 flex-col border-r bg-muted/20 md:flex">
       <div className="flex h-16 items-center border-b px-6">
-        <span className="text-lg font-semibold tracking-tight">
-          Agentic Commerce
-        </span>
+        <Logo />
       </div>
       <nav className="flex-1 space-y-1 p-4">
         {navItems.map((item) => {
