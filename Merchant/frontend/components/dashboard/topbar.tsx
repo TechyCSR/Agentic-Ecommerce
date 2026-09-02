@@ -2,7 +2,7 @@
 
 import { UserButton } from "@clerk/nextjs";
 import {
-  KeyRound,
+  BookOpen,
   LayoutDashboard,
   Menu,
   Package,
@@ -22,8 +22,8 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/products", label: "Products", icon: Package },
   { href: "/dashboard/store", label: "Store", icon: Store },
-  { href: "/dashboard/api-access", label: "API Access", icon: KeyRound },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
+  { href: "/docs", label: "Agent API Docs", icon: BookOpen },
 ];
 
 export function Topbar() {

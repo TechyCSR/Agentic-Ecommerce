@@ -4,6 +4,9 @@ const isPublicRoute = createRouteMatcher([
   "/",
   "/sign-in(.*)",
   "/sign-up(.*)",
+  "/docs(.*)",
+  // /admin has its own operator-only login, separate from Clerk.
+  "/admin(.*)",
 ]);
 
 export default clerkMiddleware(async (auth, req) => {
