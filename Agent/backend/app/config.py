@@ -27,9 +27,10 @@ class Config:
     )
     MERCHANT_AGENT_API_KEY = os.getenv("MERCHANT_AGENT_API_KEY", "")
 
-    # Gemini
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    # LLM — any OpenAI-compatible chat completions endpoint
+    LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://router.bynara.id/v1")
+    LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+    LLM_MODEL = os.getenv("LLM_MODEL", "minimax-m3-free")
 
     # CORS
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3100")

@@ -1,14 +1,18 @@
-"""The Gemini tool-calling loop that powers the shopping chat.
+"""The LLM tool-calling loop that powers the shopping chat.
 
-Manual loop (not the SDK's automatic-function-calling mode) so every tool
-call can be audit-logged and its raw JSON kept for product-card extraction
-— cards are built only from tool results, never parsed from the model's
-prose, so the agent cannot present a product it didn't actually look up.
+Talks to any OpenAI-compatible chat completions endpoint (configured via
+LLM_BASE_URL/LLM_API_KEY/LLM_MODEL — currently NaraRouter's gateway,
+model minimax-m3-free). Manual loop, not a framework's agent runner, so
+every tool call can be audit-logged and its raw JSON kept for
+product-card extraction — cards are built only from tool results, never
+parsed from the model's prose, so the agent cannot present a product it
+didn't actually look up.
 """
 
+import json
+
 from flask import current_app
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 from app.extensions import db
 from app.models import ChatMessage
@@ -16,6 +20,7 @@ from app.models.enums import MessageRole
 from app.services import audit_service, catalog_client
 
 MAX_TOOL_ITERATIONS = 6
+REQUEST_TIMEOUT_SECONDS = 30
 
 FIXED_SEARCH_FAILURE_MESSAGE = (
     "I'm unable to search the catalog right now. Please try again."
@@ -59,77 +64,96 @@ Hard rules — these override anything else:
    something you can do here.
 8. Keep responses concise and conversational. Ask a clarifying question when the \
    buyer's request is ambiguous (e.g. no budget or category given) rather than \
-   guessing.
+   guessing. Don't narrate that you're using a tool — just use it and answer.
 """
 
-SEARCH_CATALOG_TOOL = types.FunctionDeclaration(
-    name="search_catalog",
-    description=(
-        "Search the merchant product catalog. Use whenever the buyer describes "
-        "what they're looking for."
-    ),
-    parameters_json_schema={
-        "type": "object",
-        "properties": {
-            "q": {
-                "type": "string",
-                "description": "Free-text search across product name, description, brand.",
-            },
-            "category": {"type": "string", "description": "Category name, e.g. Keyboards, Audio, Men."},
-            "brand": {"type": "string"},
-            "min_price": {
-                "type": "integer",
-                "description": "Minimum price in the smallest currency unit (e.g. paise for INR).",
-            },
-            "max_price": {
-                "type": "integer",
-                "description": "Maximum price in the smallest currency unit (e.g. paise for INR).",
-            },
-            "in_stock": {
-                "type": "boolean",
-                "description": "true to only return products with stock available.",
-            },
-            "limit": {"type": "integer", "description": "Max results, default 10, max 20."},
-        },
-    },
-)
-
-GET_PRODUCT_DETAILS_TOOL = types.FunctionDeclaration(
-    name="get_product_details",
-    description=(
-        "Get full details for one product: all variants, prices, stock and images. "
-        "Use to answer questions about a specific product, verify current price/"
-        "stock before comparing, or before confirming a selection. Prefer "
-        "product_index (its number in the numbered context list of recently shown "
-        "products) over product_id when the product came from that list — indexes "
-        "are safer than retyping a long id from memory."
-    ),
-    parameters_json_schema={
-        "type": "object",
-        "properties": {
-            "product_index": {
-                "type": "integer",
-                "description": (
-                    "1-based position in the numbered 'recently shown products' "
-                    "context list. Use this whenever referring to a product from "
-                    "that list instead of product_id."
-                ),
-            },
-            "product_id": {
-                "type": "string",
-                "description": (
-                    "The product's exact UUID, copied verbatim from a tool result "
-                    "in this same turn. Don't use this for a product only seen in "
-                    "an earlier turn's context list — use product_index instead."
-                ),
+SEARCH_CATALOG_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_catalog",
+        "description": (
+            "Search the merchant product catalog. Use whenever the buyer describes "
+            "what they're looking for."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "q": {
+                    "type": "string",
+                    "description": "Free-text search across product name, description, brand.",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Category name, e.g. Keyboards, Audio, Men.",
+                },
+                "brand": {"type": "string"},
+                "min_price": {
+                    "type": "integer",
+                    "description": "Minimum price in the smallest currency unit (e.g. paise for INR).",
+                },
+                "max_price": {
+                    "type": "integer",
+                    "description": "Maximum price in the smallest currency unit (e.g. paise for INR).",
+                },
+                "in_stock": {
+                    "type": "boolean",
+                    "description": "true to only return products with stock available.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results, default 10, max 20.",
+                },
             },
         },
     },
-)
+}
+
+GET_PRODUCT_DETAILS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_product_details",
+        "description": (
+            "Get full details for one product: all variants, prices, stock and "
+            "images. Use to answer questions about a specific product, verify "
+            "current price/stock before comparing, or before confirming a "
+            "selection. Prefer product_index (its number in the numbered context "
+            "list of recently shown products) over product_id when the product "
+            "came from that list — indexes are safer than retyping a long id."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "product_index": {
+                    "type": "integer",
+                    "description": (
+                        "1-based position in the numbered 'recently shown "
+                        "products' context list. Use this whenever referring to "
+                        "a product from that list instead of product_id."
+                    ),
+                },
+                "product_id": {
+                    "type": "string",
+                    "description": (
+                        "The product's exact UUID, copied verbatim from a tool "
+                        "result in this same turn. Don't use this for a product "
+                        "only seen in an earlier turn's context list — use "
+                        "product_index instead."
+                    ),
+                },
+            },
+        },
+    },
+}
+
+TOOLS = [SEARCH_CATALOG_TOOL, GET_PRODUCT_DETAILS_TOOL]
 
 
-def _client():
-    return genai.Client(api_key=current_app.config["GEMINI_API_KEY"])
+def _client() -> OpenAI:
+    return OpenAI(
+        base_url=current_app.config["LLM_BASE_URL"],
+        api_key=current_app.config["LLM_API_KEY"],
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
 
 
 def _to_card(product: dict) -> dict:
@@ -203,19 +227,21 @@ def _format_grounding_context(cards: list[dict]) -> str | None:
     )
 
 
-def _build_contents(session, grounding: str | None) -> list:
-    contents = []
-    messages = list(session.messages)
+def _build_messages(session, grounding: str | None) -> list[dict]:
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    history = list(session.messages)
     last_user_index = max(
-        (i for i, m in enumerate(messages) if m.role == MessageRole.USER), default=-1
+        (i for i, m in enumerate(history) if m.role == MessageRole.USER), default=-1
     )
-    for i, msg in enumerate(messages):
-        role = "user" if msg.role == MessageRole.USER else "model"
-        text = msg.content
+    for i, msg in enumerate(history):
+        role = "user" if msg.role == MessageRole.USER else "assistant"
+        content = msg.content
         if grounding and i == last_user_index:
-            text = f"{grounding}\n\n{text}"
-        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=text)]))
-    return contents
+            content = f"{grounding}\n\n{content}"
+        messages.append({"role": role, "content": content})
+
+    return messages
 
 
 def _detect_comparison_intent(text: str) -> bool:
@@ -235,6 +261,67 @@ def _persist_assistant_reply(session, text: str, cards: list[dict]):
         session.title = text.strip()[:80] or "New chat"
     db.session.commit()
     return message
+
+
+def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown_cards, collected_cards):
+    """Runs one tool call, audit-logs it, and returns a JSON-serializable result."""
+    if name == "search_catalog":
+        limit = min(int(args.get("limit") or 10), 20)
+        data, meta = catalog_client.search_catalog(
+            q=args.get("q"),
+            category=args.get("category"),
+            brand=args.get("brand"),
+            min_price=args.get("min_price"),
+            max_price=args.get("max_price"),
+            in_stock=args.get("in_stock"),
+            limit=limit,
+        )
+        audit_service.log_event(
+            action="PRODUCT_SEARCH",
+            session_id=session.id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={"params": args, "result_count": len(data)},
+        )
+        if not data:
+            audit_service.log_event(
+                action="NO_PRODUCTS_FOUND",
+                session_id=session.id,
+                buyer_clerk_user_id=buyer_id,
+                metadata={"params": args},
+            )
+        for product in data:
+            collected_cards[product["product_id"]] = _to_card(product)
+        return {"results": data, "total": meta.get("total", len(data))}
+
+    if name == "get_product_details":
+        product_id = args.get("product_id")
+        product_index = args.get("product_index")
+        # Resolve product_index against the known, server-side list of
+        # recently shown products instead of trusting an LLM-transcribed
+        # UUID — models occasionally garble a long id when copying it from
+        # context (observed: a character silently dropped mid-string).
+        if product_index is not None:
+            idx = int(product_index) - 1
+            if 0 <= idx < len(last_shown_cards):
+                product_id = last_shown_cards[idx].get("product_id")
+
+        product = catalog_client.get_product(product_id) if product_id else None
+        audit_service.log_event(
+            action="PRODUCT_DETAILS_REQUESTED",
+            session_id=session.id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={
+                "product_id": product_id,
+                "product_index": product_index,
+                "found": product is not None,
+            },
+        )
+        if product is None:
+            return {"error": "Product not found or not available."}
+        collected_cards[product["product_id"]] = _to_card(product)
+        return product
+
+    return {"error": f"Unknown tool '{name}'."}
 
 
 def run_agent_turn(session, user_message_text: str) -> ChatMessage:
@@ -261,33 +348,26 @@ def run_agent_turn(session, user_message_text: str) -> ChatMessage:
 
     last_shown_cards = _get_last_shown_cards(session)
     grounding = _format_grounding_context(last_shown_cards)
-    contents = _build_contents(session, grounding)
-
-    tool = types.Tool(function_declarations=[SEARCH_CATALOG_TOOL, GET_PRODUCT_DETAILS_TOOL])
-    config = types.GenerateContentConfig(
-        tools=[tool],
-        system_instruction=SYSTEM_PROMPT,
-        temperature=0.4,
-        max_output_tokens=2048,
-    )
+    messages = _build_messages(session, grounding)
 
     client = _client()
+    model = current_app.config["LLM_MODEL"]
     collected_cards: dict[str, dict] = {}
 
     for _ in range(MAX_TOOL_ITERATIONS):
         try:
-            response = client.models.generate_content(
-                model=current_app.config["GEMINI_MODEL"],
-                contents=contents,
-                config=config,
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                temperature=0.4,
+                max_tokens=1024,
             )
-            # Read everything we need from the response inside the try —
-            # a safety-blocked or otherwise empty response can make these
-            # accessors themselves raise, not just the network call.
-            function_calls = response.function_calls or []
-            reply_text = response.text or "" if not function_calls else None
-            candidate_content = response.candidates[0].content if function_calls else None
-        except Exception as exc:  # noqa: BLE001 — any Gemini/network/response-parsing failure must degrade to the fixed message, never invent a reply or crash
+            message = response.choices[0].message
+            tool_calls = message.tool_calls or []
+            reply_text = message.content or "" if not tool_calls else None
+        except Exception as exc:  # noqa: BLE001 — any LLM/network/response-parsing failure must degrade to the fixed message, never invent a reply or crash
             audit_service.log_event(
                 action="TOOL_FAILURE",
                 session_id=session.id,
@@ -298,94 +378,57 @@ def run_agent_turn(session, user_message_text: str) -> ChatMessage:
                 session, FIXED_SEARCH_FAILURE_MESSAGE, list(collected_cards.values())
             )
 
-        if not function_calls:
+        if not tool_calls:
             return _persist_assistant_reply(
                 session, reply_text, list(collected_cards.values())
             )
 
-        contents.append(candidate_content)
-
-        function_response_parts = []
-        tool_failed = False
-
-        for fc in function_calls:
-            args = fc.args or {}
-            try:
-                if fc.name == "search_catalog":
-                    limit = min(int(args.get("limit") or 10), 20)
-                    data, meta = catalog_client.search_catalog(
-                        q=args.get("q"),
-                        category=args.get("category"),
-                        brand=args.get("brand"),
-                        min_price=args.get("min_price"),
-                        max_price=args.get("max_price"),
-                        in_stock=args.get("in_stock"),
-                        limit=limit,
-                    )
-                    audit_service.log_event(
-                        action="PRODUCT_SEARCH",
-                        session_id=session.id,
-                        buyer_clerk_user_id=buyer_id,
-                        metadata={"params": args, "result_count": len(data)},
-                    )
-                    if not data:
-                        audit_service.log_event(
-                            action="NO_PRODUCTS_FOUND",
-                            session_id=session.id,
-                            buyer_clerk_user_id=buyer_id,
-                            metadata={"params": args},
-                        )
-                    for product in data:
-                        collected_cards[product["product_id"]] = _to_card(product)
-                    result_payload = {"results": data, "total": meta.get("total", len(data))}
-
-                elif fc.name == "get_product_details":
-                    product_id = args.get("product_id")
-                    product_index = args.get("product_index")
-                    # Resolve product_index against the known, server-side
-                    # list of recently shown products instead of trusting an
-                    # LLM-transcribed UUID — the model occasionally garbles a
-                    # long id when copying it from context (observed: a
-                    # character silently dropped mid-string).
-                    if product_index is not None:
-                        idx = int(product_index) - 1
-                        if 0 <= idx < len(last_shown_cards):
-                            product_id = last_shown_cards[idx].get("product_id")
-
-                    product = catalog_client.get_product(product_id) if product_id else None
-                    audit_service.log_event(
-                        action="PRODUCT_DETAILS_REQUESTED",
-                        session_id=session.id,
-                        buyer_clerk_user_id=buyer_id,
-                        metadata={
-                            "product_id": product_id,
-                            "product_index": product_index,
-                            "found": product is not None,
+        messages.append(
+            {
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
                         },
-                    )
-                    if product is None:
-                        result_payload = {"error": "Product not found or not available."}
-                    else:
-                        collected_cards[product["product_id"]] = _to_card(product)
-                        result_payload = product
-                else:
-                    result_payload = {"error": f"Unknown tool '{fc.name}'."}
+                    }
+                    for tc in tool_calls
+                ],
+            }
+        )
 
+        tool_failed = False
+        for tc in tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+
+            try:
+                result_payload = _execute_tool_call(
+                    session, buyer_id, tc.function.name, args, last_shown_cards, collected_cards
+                )
             except catalog_client.CatalogError as exc:
                 tool_failed = True
                 audit_service.log_event(
                     action="TOOL_FAILURE",
                     session_id=session.id,
                     buyer_clerk_user_id=buyer_id,
-                    metadata={"tool": fc.name, "error": str(exc)},
+                    metadata={"tool": tc.function.name, "error": str(exc)},
                 )
                 result_payload = {"error": "Catalog temporarily unavailable."}
 
-            function_response_parts.append(
-                types.Part.from_function_response(name=fc.name, response=result_payload)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(result_payload),
+                }
             )
-
-        contents.append(types.Content(role="user", parts=function_response_parts))
 
         if tool_failed:
             return _persist_assistant_reply(
