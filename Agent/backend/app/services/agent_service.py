@@ -46,9 +46,10 @@ Hard rules — these override anything else:
    for your requirements." You may then ask a clarifying question about relaxing \
    their criteria — do not invent alternative products.
 5. When the buyer references earlier results ("the first one", "the cheapest one", \
-   "that keyboard", "compare these"), resolve the reference using the context block \
-   that lists recently shown products with their product_id — call get_product_details \
-   with that id if you need fresher/fuller data before answering.
+   "that keyboard", "compare these"), match it against the numbered context block of \
+   recently shown products and, if you need fresher/fuller data, call \
+   get_product_details with product_index set to that number — do not retype a \
+   product_id from memory.
 6. When comparing products, only compare fields you actually have from tool results \
    (price, availability, stock, brand, category, variant names) — never claim a \
    feature difference you have no data for.
@@ -96,14 +97,33 @@ SEARCH_CATALOG_TOOL = types.FunctionDeclaration(
 GET_PRODUCT_DETAILS_TOOL = types.FunctionDeclaration(
     name="get_product_details",
     description=(
-        "Get full details for one product by its product_id: all variants, prices, "
-        "stock and images. Use to answer questions about a specific product, or to "
-        "verify current price/stock before comparing or confirming a selection."
+        "Get full details for one product: all variants, prices, stock and images. "
+        "Use to answer questions about a specific product, verify current price/"
+        "stock before comparing, or before confirming a selection. Prefer "
+        "product_index (its number in the numbered context list of recently shown "
+        "products) over product_id when the product came from that list — indexes "
+        "are safer than retyping a long id from memory."
     ),
     parameters_json_schema={
         "type": "object",
-        "properties": {"product_id": {"type": "string", "description": "The product's UUID."}},
-        "required": ["product_id"],
+        "properties": {
+            "product_index": {
+                "type": "integer",
+                "description": (
+                    "1-based position in the numbered 'recently shown products' "
+                    "context list. Use this whenever referring to a product from "
+                    "that list instead of product_id."
+                ),
+            },
+            "product_id": {
+                "type": "string",
+                "description": (
+                    "The product's exact UUID, copied verbatim from a tool result "
+                    "in this same turn. Don't use this for a product only seen in "
+                    "an earlier turn's context list — use product_index instead."
+                ),
+            },
+        },
     },
 )
 
@@ -151,7 +171,7 @@ def _to_card(product: dict) -> dict:
     }
 
 
-def _build_grounding_context(session) -> str | None:
+def _get_last_shown_cards(session) -> list[dict]:
     last_with_cards = next(
         (
             m
@@ -160,22 +180,26 @@ def _build_grounding_context(session) -> str | None:
         ),
         None,
     )
-    if not last_with_cards:
+    return last_with_cards.product_cards if last_with_cards else []
+
+
+def _format_grounding_context(cards: list[dict]) -> str | None:
+    if not cards:
         return None
 
     lines = []
-    for i, card in enumerate(last_with_cards.product_cards, start=1):
+    for i, card in enumerate(cards, start=1):
         price = card.get("price") or {}
         lines.append(
-            f"{i}. {card.get('name')} (product_id: {card.get('product_id')}, "
-            f"price: {price.get('amount')} {price.get('currency')}, "
-            f"availability: {card.get('availability')})"
+            f"{i}. {card.get('name')} (price: {price.get('amount')} "
+            f"{price.get('currency')}, availability: {card.get('availability')})"
         )
     return (
         "[Context — products most recently shown to the buyer, in order, for "
         "resolving references like 'the first one' or 'the cheapest one':\n"
         + "\n".join(lines)
-        + "\nUse the exact product_id above when calling get_product_details.]"
+        + "\nWhen looking up one of these with get_product_details, pass "
+        "product_index (its number above) — do not retype an id from memory.]"
     )
 
 
@@ -235,7 +259,8 @@ def run_agent_turn(session, user_message_text: str) -> ChatMessage:
     )
     db.session.commit()
 
-    grounding = _build_grounding_context(session)
+    last_shown_cards = _get_last_shown_cards(session)
+    grounding = _format_grounding_context(last_shown_cards)
     contents = _build_contents(session, grounding)
 
     tool = types.Tool(function_declarations=[SEARCH_CATALOG_TOOL, GET_PRODUCT_DETAILS_TOOL])
@@ -256,22 +281,29 @@ def run_agent_turn(session, user_message_text: str) -> ChatMessage:
                 contents=contents,
                 config=config,
             )
-        except Exception as exc:  # noqa: BLE001 — any Gemini/network failure must degrade to the fixed message, never invent a reply
+            # Read everything we need from the response inside the try —
+            # a safety-blocked or otherwise empty response can make these
+            # accessors themselves raise, not just the network call.
+            function_calls = response.function_calls or []
+            reply_text = response.text or "" if not function_calls else None
+            candidate_content = response.candidates[0].content if function_calls else None
+        except Exception as exc:  # noqa: BLE001 — any Gemini/network/response-parsing failure must degrade to the fixed message, never invent a reply or crash
             audit_service.log_event(
                 action="TOOL_FAILURE",
                 session_id=session.id,
                 buyer_clerk_user_id=buyer_id,
                 metadata={"error": str(exc)},
             )
-            return _persist_assistant_reply(session, FIXED_SEARCH_FAILURE_MESSAGE, [])
-
-        function_calls = response.function_calls or []
-        if not function_calls:
             return _persist_assistant_reply(
-                session, response.text or "", list(collected_cards.values())
+                session, FIXED_SEARCH_FAILURE_MESSAGE, list(collected_cards.values())
             )
 
-        contents.append(response.candidates[0].content)
+        if not function_calls:
+            return _persist_assistant_reply(
+                session, reply_text, list(collected_cards.values())
+            )
+
+        contents.append(candidate_content)
 
         function_response_parts = []
         tool_failed = False
@@ -309,12 +341,27 @@ def run_agent_turn(session, user_message_text: str) -> ChatMessage:
 
                 elif fc.name == "get_product_details":
                     product_id = args.get("product_id")
-                    product = catalog_client.get_product(product_id)
+                    product_index = args.get("product_index")
+                    # Resolve product_index against the known, server-side
+                    # list of recently shown products instead of trusting an
+                    # LLM-transcribed UUID — the model occasionally garbles a
+                    # long id when copying it from context (observed: a
+                    # character silently dropped mid-string).
+                    if product_index is not None:
+                        idx = int(product_index) - 1
+                        if 0 <= idx < len(last_shown_cards):
+                            product_id = last_shown_cards[idx].get("product_id")
+
+                    product = catalog_client.get_product(product_id) if product_id else None
                     audit_service.log_event(
                         action="PRODUCT_DETAILS_REQUESTED",
                         session_id=session.id,
                         buyer_clerk_user_id=buyer_id,
-                        metadata={"product_id": product_id, "found": product is not None},
+                        metadata={
+                            "product_id": product_id,
+                            "product_index": product_index,
+                            "found": product is not None,
+                        },
                     )
                     if product is None:
                         result_payload = {"error": "Product not found or not available."}
