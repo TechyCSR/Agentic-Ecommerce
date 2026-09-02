@@ -6,7 +6,6 @@ from app.extensions import db
 from app.models import ApiClient, ApiClientScope
 from app.models.enums import PHASE1_ENABLED_SCOPES, ApiClientStatus, ApiClientType
 from app.services import audit_service
-from app.services.merchant_service import get_merchant_for_user
 from app.utils.api_keys import generate_api_key, hash_api_key
 from app.utils.exceptions import (
     ForbiddenError,
@@ -15,10 +14,12 @@ from app.utils.exceptions import (
     ValidationError,
 )
 
+# API clients are platform-wide ("central"): one key, issued by an admin,
+# can read across every merchant's agent-searchable catalog. They are never
+# scoped to a single merchant (merchant_id stays NULL).
 
-def create_api_client(user, payload):
-    merchant = get_merchant_for_user(user)
 
+def create_central_api_client(admin_email, payload):
     name = payload.get("name")
     if not name:
         raise ValidationError("API client name is required")
@@ -36,7 +37,7 @@ def create_api_client(user, payload):
     last4 = raw_key[-4:]
 
     client = ApiClient(
-        merchant_id=merchant.id,
+        merchant_id=None,
         name=name,
         client_type=ApiClientType(client_type),
         api_key_hash=key_hash,
@@ -53,51 +54,38 @@ def create_api_client(user, payload):
     db.session.commit()
 
     audit_service.log_event(
-        actor_type="USER",
-        actor_id=user.id,
-        merchant_id=merchant.id,
+        actor_type="ADMIN",
         resource_type="API_CLIENT",
         resource_id=client.id,
         action="API_KEY_CREATED",
-        metadata={"name": client.name, "scopes": scopes},
+        metadata={"name": client.name, "scopes": scopes, "admin_email": admin_email},
     )
 
     return client, raw_key
 
 
-def list_api_clients_for_user(user):
-    merchant = get_merchant_for_user(user)
-    return (
-        ApiClient.query.filter_by(merchant_id=merchant.id)
-        .order_by(ApiClient.created_at.desc())
-        .all()
-    )
+def list_all_api_clients():
+    return ApiClient.query.order_by(ApiClient.created_at.desc()).all()
 
 
-def get_api_client_for_user(user, client_id):
+def get_api_client_or_404(client_id):
     client = ApiClient.query.get(client_id)
     if not client:
         raise NotFoundError("API client not found", code="API_CLIENT_NOT_FOUND")
-    merchant = get_merchant_for_user(user)
-    if client.merchant_id != merchant.id:
-        raise ForbiddenError(
-            "You do not have access to this API client", code="API_CLIENT_FORBIDDEN"
-        )
     return client
 
 
-def revoke_api_client(user, client_id):
-    client = get_api_client_for_user(user, client_id)
+def revoke_api_client(admin_email, client_id):
+    client = get_api_client_or_404(client_id)
     client.status = ApiClientStatus.REVOKED
     db.session.commit()
 
     audit_service.log_event(
-        actor_type="USER",
-        actor_id=user.id,
-        merchant_id=client.merchant_id,
+        actor_type="ADMIN",
         resource_type="API_CLIENT",
         resource_id=client.id,
         action="API_KEY_REVOKED",
+        metadata={"admin_email": admin_email},
     )
     return client
 

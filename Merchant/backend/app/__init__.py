@@ -49,8 +49,8 @@ def register_error_handlers(app):
 
 
 def register_blueprints(app):
+    from app.routes.admin import bp as admin_bp
     from app.routes.agent import bp as agent_bp
-    from app.routes.api_clients import bp as api_clients_bp
     from app.routes.auth import bp as auth_bp
     from app.routes.catalog import bp as catalog_bp
     from app.routes.categories import bp as categories_bp
@@ -67,4 +67,4 @@ def register_blueprints(app):
     app.register_blueprint(categories_bp)
     app.register_blueprint(catalog_bp)
     app.register_blueprint(agent_bp)
-    app.register_blueprint(api_clients_bp)
+    app.register_blueprint(admin_bp)

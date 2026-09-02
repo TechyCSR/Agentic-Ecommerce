@@ -30,6 +30,11 @@ class Config:
     API_KEY_SECRET = os.getenv("API_KEY_SECRET", "dev-api-key-secret")
     API_KEY_PREFIX = os.getenv("API_KEY_PREFIX", "ac_test_")
 
+    # Admin (single hardcoded operator account, separate from Clerk users)
+    ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
+    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+    ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "dev-admin-jwt-secret")
+
     # CORS
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 
