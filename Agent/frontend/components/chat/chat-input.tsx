@@ -10,16 +10,18 @@ export function ChatInput({
   onSend,
   disabled,
 }: {
-  onSend: (text: string) => void;
+  onSend: (text: string) => Promise<boolean>;
   disabled: boolean;
 }) {
   const [value, setValue] = useState("");
 
-  function handleSend() {
+  async function handleSend() {
     const text = value.trim();
     if (!text || disabled) return;
-    onSend(text);
-    setValue("");
+    // Only clear the draft once it's actually been sent — on failure the
+    // buyer's text stays put instead of silently vanishing.
+    const sent = await onSend(text);
+    if (sent) setValue("");
   }
 
   return (

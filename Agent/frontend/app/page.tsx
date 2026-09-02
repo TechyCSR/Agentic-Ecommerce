@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { ChatInput } from "@/components/chat/chat-input";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { SelectionBanner } from "@/components/chat/selection-banner";
-import { SessionSidebar } from "@/components/chat/session-sidebar";
+import { MobileSessionHeader, SessionSidebar } from "@/components/chat/session-sidebar";
 import { Button } from "@/components/ui/button";
 import {
   useCreateSession,
@@ -52,7 +52,7 @@ export default function ChatPage() {
     }
   }
 
-  async function handleSend(text: string) {
+  async function handleSend(text: string): Promise<boolean> {
     try {
       // Resolve the session id locally rather than relying on `activeId`
       // state (setActiveId doesn't take effect until the next render, so
@@ -65,8 +65,10 @@ export default function ChatPage() {
         sessionId = created.id;
       }
       await sendMessage.mutateAsync({ sessionId, text });
+      return true;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to send message");
+      return false;
     }
   }
 
@@ -83,18 +85,21 @@ export default function ChatPage() {
     }
   }
 
+  const sidebarProps = {
+    sessions: sessions ?? [],
+    activeId,
+    onSelect: setActiveId,
+    onNew: handleNewSession,
+    isLoading: sessionsLoading,
+    isCreating: createSession.isPending,
+  };
+
   return (
     <div className="flex h-screen w-full overflow-hidden">
-      <SessionSidebar
-        sessions={sessions ?? []}
-        activeId={activeId}
-        onSelect={setActiveId}
-        onNew={handleNewSession}
-        isLoading={sessionsLoading}
-        isCreating={createSession.isPending}
-      />
+      <SessionSidebar {...sidebarProps} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
+        <MobileSessionHeader {...sidebarProps} />
         {selection && <SelectionBanner selection={selection} />}
 
         <div className="flex-1 overflow-y-auto p-4 md:p-6">

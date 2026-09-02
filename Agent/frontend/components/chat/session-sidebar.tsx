@@ -1,30 +1,34 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { Loader2, MessageSquarePlus } from "lucide-react";
+import { Loader2, Menu, MessageSquarePlus } from "lucide-react";
+import { useState } from "react";
 
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import type { ChatSession } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export function SessionSidebar({
-  sessions,
-  activeId,
-  onSelect,
-  onNew,
-  isLoading,
-  isCreating,
-}: {
+interface SessionListProps {
   sessions: ChatSession[];
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
   isLoading: boolean;
   isCreating: boolean;
-}) {
+}
+
+function SessionListContent({
+  sessions,
+  activeId,
+  onSelect,
+  onNew,
+  isLoading,
+  isCreating,
+}: SessionListProps) {
   return (
-    <aside className="hidden w-64 flex-col border-r bg-muted/20 md:flex">
+    <>
       <div className="flex h-16 items-center border-b px-4">
         <Logo markClassName="size-6" textClassName="text-sm font-semibold" />
       </div>
@@ -65,6 +69,46 @@ export function SessionSidebar({
         <UserButton />
         <span className="text-sm text-muted-foreground">Account</span>
       </div>
+    </>
+  );
+}
+
+export function SessionSidebar(props: SessionListProps) {
+  return (
+    <aside className="hidden w-64 flex-col border-r bg-muted/20 md:flex">
+      <SessionListContent {...props} />
     </aside>
+  );
+}
+
+export function MobileSessionHeader(props: SessionListProps) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <header className="flex h-14 items-center justify-between border-b px-3 md:hidden">
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetTrigger render={<Button variant="ghost" size="icon" />}>
+          <Menu className="size-5" />
+        </SheetTrigger>
+        <SheetContent side="left" className="w-64 p-0">
+          <SheetTitle className="sr-only">Chats</SheetTitle>
+          <div className="flex h-full flex-col">
+            <SessionListContent
+              {...props}
+              onSelect={(id) => {
+                props.onSelect(id);
+                setOpen(false);
+              }}
+              onNew={() => {
+                props.onNew();
+                setOpen(false);
+              }}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+      <Logo markClassName="size-6" textClassName="text-sm font-semibold" />
+      <UserButton />
+    </header>
   );
 }
