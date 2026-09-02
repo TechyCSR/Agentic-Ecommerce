@@ -6,20 +6,12 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/dashboard/stat-card";
-import { useProducts } from "@/lib/queries/use-products";
+import { useProductStats } from "@/lib/queries/use-product-stats";
 import { useCurrentUser } from "@/lib/queries/use-current-user";
 
 export default function DashboardPage() {
   const { data: user } = useCurrentUser();
-  const { data, isLoading } = useProducts({ limit: 100 });
-
-  const products = data?.data ?? [];
-  const totalProducts = data?.meta?.total ?? products.length;
-  const activeProducts = products.filter((p) => p.status === "ACTIVE").length;
-  const outOfStockProducts = products.filter(
-    (p) => p.total_stock === 0
-  ).length;
-  const totalInventory = products.reduce((sum, p) => sum + p.total_stock, 0);
+  const { data: stats, isLoading } = useProductStats();
 
   return (
     <div className="space-y-8">
@@ -46,18 +38,26 @@ export default function DashboardPage() {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Total Products" value={totalProducts} icon={Package} />
+          <StatCard
+            title="Total Products"
+            value={stats?.total_products ?? 0}
+            icon={Package}
+          />
           <StatCard
             title="Active Products"
-            value={activeProducts}
+            value={stats?.active_products ?? 0}
             icon={CheckCircle2}
           />
           <StatCard
             title="Out of Stock"
-            value={outOfStockProducts}
+            value={stats?.out_of_stock_products ?? 0}
             icon={AlertTriangle}
           />
-          <StatCard title="Total Inventory" value={totalInventory} icon={Boxes} />
+          <StatCard
+            title="Total Inventory"
+            value={stats?.total_inventory ?? 0}
+            icon={Boxes}
+          />
         </div>
       )}
     </div>
