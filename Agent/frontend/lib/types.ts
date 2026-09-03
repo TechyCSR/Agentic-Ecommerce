@@ -57,6 +57,8 @@ export interface ChatMessage {
   content: string;
   product_cards: ProductCard[] | null;
   suggested_replies: string[] | null;
+  /** A priced order this turn prepared — renders a Pay button. */
+  prepared_checkout: PreparedCheckout | null;
   created_at: string;
 }
 
@@ -172,6 +174,32 @@ export interface Receipt {
   paid_at: string | null;
   created_at: string;
 }
+
+export interface Address {
+  id: string;
+  label: string | null;
+  full_name: string;
+  phone: string;
+  line1: string;
+  line2: string | null;
+  city: string;
+  state: string | null;
+  postal_code: string;
+  country: string;
+  is_default: boolean;
+  one_line: string;
+}
+
+export type AddressPayload = {
+  label?: string;
+  full_name: string;
+  phone: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  state?: string;
+  postal_code: string;
+};
 
 /** One money action from the audit trail, scoped to the signed-in buyer. */
 export interface AuditEntry {

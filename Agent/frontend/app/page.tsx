@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { AgentHeader } from "@/components/chat/agent-header";
 import { CartDrawer } from "@/components/chat/cart-drawer";
+import { AddressDrawer } from "@/components/addresses/address-drawer";
 import { OrdersDrawer } from "@/components/orders/orders-drawer";
 import { ProfileSync } from "@/components/profile-sync";
 import { DeepLinkCheckout } from "@/components/checkout/deep-link-checkout";
@@ -117,6 +118,7 @@ export default function ChatPage() {
 
   const cartSlot = (
     <div className="flex items-center gap-2">
+      <AddressDrawer />
       <OrdersDrawer />
       {activeId ? <CartDrawer sessionId={activeId} cart={cart} /> : null}
     </div>

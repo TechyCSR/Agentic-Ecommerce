@@ -11,6 +11,21 @@ import { Button } from "@/components/ui/button";
 import type { ActivityStep, ChatMessage, PreparedCheckout, ProductCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+/** Filler the suggestion builder falls back to when it has nothing useful.
+ * On its own it's just clutter — and tapping it returns the same thing. */
+const GENERIC_SUGGESTIONS = new Set([
+  "search something else",
+  "show more options",
+  "refine my search",
+]);
+
+function usefulSuggestions(suggestions: string[] | null | undefined): string[] {
+  const kept = (suggestions ?? []).filter(
+    (s) => !GENERIC_SUGGESTIONS.has(s.trim().toLowerCase())
+  );
+  return kept.length >= 2 ? kept : [];
+}
+
 function AssistantAvatar() {
   return (
     <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
@@ -59,9 +74,10 @@ export function MessageBubble({
             selectedProductIds={selectedProductIds}
           />
         )}
-        {onSuggestion && message.suggested_replies && message.suggested_replies.length > 0 && (
+        {message.prepared_checkout && <PayPrompt checkout={message.prepared_checkout} />}
+        {onSuggestion && usefulSuggestions(message.suggested_replies).length > 0 && (
           <SuggestionChips
-            suggestions={message.suggested_replies}
+            suggestions={usefulSuggestions(message.suggested_replies)}
             onPick={onSuggestion}
             disabled={suggestionsDisabled}
           />
@@ -115,7 +131,7 @@ export function LiveAssistantBubble({
           />
         )}
         {pendingCheckout && <PayPrompt checkout={pendingCheckout} />}
-        <SuggestionChips suggestions={suggestions} onPick={onSuggestion} />
+        <SuggestionChips suggestions={usefulSuggestions(suggestions)} onPick={onSuggestion} />
       </div>
     </div>
   );
