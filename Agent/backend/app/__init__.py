@@ -45,7 +45,9 @@ def register_blueprints(app):
     from app.routes.chat import bp as chat_bp
     from app.routes.checkout import bp as checkout_bp
     from app.routes.health import bp as health_bp
+    from app.routes.webhooks import bp as webhooks_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(checkout_bp)
+    app.register_blueprint(webhooks_bp)

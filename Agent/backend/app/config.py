@@ -36,6 +36,9 @@ class Config:
     # is ever sent to the browser, and only to open Checkout.
     RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
     RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+    # Set in the Razorpay dashboard when creating the webhook. Distinct
+    # from the API key secret, and signs the raw webhook body.
+    RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
 
     # Upper bound on a single order, in the smallest currency unit (paise).
     # Razorpay enforces its own per-account/per-method ceiling and rejects
