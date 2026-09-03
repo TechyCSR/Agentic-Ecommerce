@@ -1,13 +1,7 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import {
-  BookOpen,
-  LayoutDashboard,
-  Package,
-  Settings,
-  Store,
-} from "lucide-react";
+import { BookOpen, CreditCard, LayoutDashboard, Package, Settings, ShoppingBag, Store } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -17,6 +11,8 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/products", label: "Products", icon: Package },
+  { href: "/dashboard/orders", label: "Orders", icon: ShoppingBag },
+  { href: "/dashboard/payments", label: "Payments", icon: CreditCard },
   { href: "/dashboard/store", label: "Store", icon: Store },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
   { href: "/docs", label: "Agent API Docs", icon: BookOpen },

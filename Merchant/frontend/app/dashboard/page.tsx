@@ -1,17 +1,20 @@
 "use client";
 
-import { AlertTriangle, Boxes, CheckCircle2, Package } from "lucide-react";
+import { AlertTriangle, Boxes, CheckCircle2, IndianRupee, Package, ShoppingBag, Truck } from "lucide-react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/dashboard/stat-card";
+import { formatMoney } from "@/lib/money";
+import { useOrderStats } from "@/lib/queries/use-orders";
 import { useProductStats } from "@/lib/queries/use-product-stats";
 import { useCurrentUser } from "@/lib/queries/use-current-user";
 
 export default function DashboardPage() {
   const { data: user } = useCurrentUser();
   const { data: stats, isLoading } = useProductStats();
+  const { data: orderStats } = useOrderStats();
 
   return (
     <div className="space-y-8">
@@ -60,6 +63,36 @@ export default function DashboardPage() {
           />
         </div>
       )}
+
+      <div>
+        <h2 className="mb-4 text-lg font-semibold tracking-tight">Sales</h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            title="Revenue"
+            value={formatMoney(
+              orderStats?.revenue_amount ?? 0,
+              orderStats?.currency ?? "INR"
+            )}
+            icon={IndianRupee}
+            hint="From paid orders"
+          />
+          <StatCard
+            title="Orders Received"
+            value={orderStats?.total_orders ?? 0}
+            icon={ShoppingBag}
+          />
+          <StatCard
+            title="Awaiting Fulfillment"
+            value={orderStats?.awaiting_fulfillment ?? 0}
+            icon={Truck}
+          />
+          <StatCard
+            title="Delivered"
+            value={orderStats?.delivered ?? 0}
+            icon={CheckCircle2}
+          />
+        </div>
+      </div>
     </div>
   );
 }
