@@ -32,6 +32,11 @@ class Config:
     LLM_API_KEY = os.getenv("LLM_API_KEY", "")
     LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 
+    # Razorpay (Test Mode). The secret stays server-side — only the key id
+    # is ever sent to the browser, and only to open Checkout.
+    RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
+    RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+
     # CORS
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3100")
 

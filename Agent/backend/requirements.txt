@@ -10,3 +10,4 @@ cryptography==43.0.1
 requests==2.32.3
 openai==3.7.0
 gunicorn==23.0.0
+razorpay==2.0.1
