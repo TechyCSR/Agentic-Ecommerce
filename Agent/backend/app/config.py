@@ -48,6 +48,13 @@ class Config:
     # checkout instead. 0 disables the app-side check.
     MAX_ORDER_AMOUNT = int(os.getenv("MAX_ORDER_AMOUNT", "0"))
 
+    # Telegram channel — the bot token talks to Telegram's API, the webhook
+    # secret authenticates updates arriving from it.
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    # Where Telegram sends buyers to complete payment (the deployed web app).
+    AGENT_WEB_URL = os.getenv("AGENT_WEB_URL", "http://localhost:3100")
+
     # CORS
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3100")
 
