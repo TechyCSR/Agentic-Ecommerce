@@ -449,6 +449,7 @@ def handle_agent_message(link: TelegramLink, text: str, just_asked: str | None =
     reply = ""
     cards: list = []
     suggestions: list = []
+    prepared = None
     notified: set = set()
 
     try:
@@ -467,6 +468,8 @@ def handle_agent_message(link: TelegramLink, text: str, just_asked: str | None =
                     send_typing(chat_id)
             elif kind == "product_cards":
                 cards = event.get("cards") or []
+            elif kind == "checkout_ready":
+                prepared = event.get("order")
             elif kind == "suggestions":
                 suggestions = event.get("items") or []
             elif kind == "error":
@@ -482,6 +485,21 @@ def handle_agent_message(link: TelegramLink, text: str, just_asked: str | None =
         send_markdown(chat_id, reply.strip())
     if cards:
         _send_products(chat_id, cards, link)
+
+    # The agent priced an order during this turn — hand the buyer the Pay
+    # button. It never pays on their behalf.
+    if prepared:
+        web_url = (current_app.config.get("AGENT_WEB_URL") or "").rstrip("/")
+        total = _money(prepared["amount"], prepared.get("currency", "INR"))
+        send_message(
+            chat_id,
+            f"<b>Your order is ready — {total}</b>\n\n"
+            "Payment happens on the secure checkout. Only you can authorize it.",
+            [[{"text": f"🔒 Pay {total}", "url": f"{web_url}/?order={prepared['order_id']}"}]]
+            if web_url else None,
+            preview=True,
+        )
+        return
 
     if not link.is_linked and _looks_account_scoped(text):
         send_message(chat_id, LOGIN_PROMPT)
