@@ -23,6 +23,7 @@ import {
   useCart,
   useCreateSession,
   useSession,
+  useTruncateSession,
   useSessions,
   useStreamChat,
 } from "@/lib/queries/use-chat";
@@ -43,10 +44,11 @@ export default function ChatPage() {
   const { data: session } = useSession(activeId ?? undefined);
   const { data: cart } = useCart(activeId ?? undefined);
   const { state: stream, send, stop } = useStreamChat();
+  const truncate = useTruncateSession();
   const addToCart = useAddToCart();
 
   const [addingProductId, setAddingProductId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<{ text: string; nonce: number } | null>(null);
+  const [draft, setDraft] = useState<{ text: string; nonce: number; fromId: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -68,7 +70,21 @@ export default function ChatPage() {
     }
   }
 
-  async function handleSend(text: string): Promise<boolean> {
+  /** Rewinds the conversation to just before `fromId`, so an edited or
+   * regenerated turn replaces what followed instead of appending to it. */
+  async function rewindTo(fromId: string): Promise<boolean> {
+    if (!activeId) return false;
+    try {
+      await truncate.mutateAsync({ sessionId: activeId, messageId: fromId });
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't rewind the chat");
+      return false;
+    }
+  }
+
+  async function handleSend(text: string, rewindFromId?: string): Promise<boolean> {
+    if (rewindFromId && !(await rewindTo(rewindFromId))) return false;
     // Resolve the session id locally rather than relying on `activeId`
     // state (setActiveId doesn't take effect until the next render, so
     // reading `activeId` right after creating a session here would still
@@ -156,18 +172,24 @@ export default function ChatPage() {
                   suggestionsDisabled={stream.isStreaming}
                   onEdit={
                     message.role === "user"
-                      ? () => setDraft({ text: message.content, nonce: Date.now() })
+                      ? () =>
+                          setDraft({
+                            text: message.content,
+                            nonce: Date.now(),
+                            fromId: message.id,
+                          })
                       : undefined
                   }
                   onRetry={
-                    // Regenerating re-sends the question this reply answered.
+                    // Replace this reply: drop it and the question that
+                    // produced it, then ask again.
                     message.role === "assistant"
                       ? () => {
                           const asked = [...messages]
                             .slice(0, messages.indexOf(message))
                             .reverse()
                             .find((m) => m.role === "user");
-                          if (asked) handleSend(asked.content);
+                          if (asked) handleSend(asked.content, asked.id);
                         }
                       : undefined
                   }

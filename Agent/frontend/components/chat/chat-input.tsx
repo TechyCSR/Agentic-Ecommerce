@@ -12,15 +12,17 @@ export function ChatInput({
   onStop,
   draft,
 }: {
-  onSend: (text: string) => Promise<boolean>;
+  onSend: (text: string, rewindFromId?: string) => Promise<boolean>;
   isStreaming?: boolean;
   onStop?: () => void;
   /** Text loaded into the composer, e.g. from "edit & resend". The nonce
    * makes re-editing the same message work — the text alone wouldn't change. */
-  draft?: { text: string; nonce: number } | null;
+  draft?: { text: string; nonce: number; fromId?: string } | null;
 }) {
   const [value, setValue] = useState("");
   const [adoptedNonce, setAdoptedNonce] = useState<number | null>(null);
+  // Set while editing a past message: sending rewinds to that point first.
+  const [rewindFromId, setRewindFromId] = useState<string | undefined>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Adjust during render rather than in an effect (this project disallows
@@ -28,6 +30,7 @@ export function ChatInput({
   if (draft && draft.nonce !== adoptedNonce) {
     setAdoptedNonce(draft.nonce);
     setValue(draft.text);
+    setRewindFromId(draft.fromId);
   }
 
   async function handleSend() {
@@ -36,9 +39,14 @@ export function ChatInput({
     // agent works so the buyer can keep typing their next question.
     if (!text) return;
     setValue("");
-    const sent = await onSend(text);
+    const rewind = rewindFromId;
+    setRewindFromId(undefined);
+    const sent = await onSend(text, rewind);
     // Restore the draft rather than silently losing it if the send failed.
-    if (!sent) setValue((current) => current || text);
+    if (!sent) {
+      setValue((current) => current || text);
+      setRewindFromId(rewind);
+    }
   }
 
   return (

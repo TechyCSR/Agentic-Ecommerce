@@ -22,8 +22,8 @@ function timeOf(iso: string) {
       });
 }
 
-/** Timestamp plus hover actions. Actions stay visible on touch devices,
- * where there is no hover to reveal them. */
+/** Timestamp plus the per-message actions: copy, edit or regenerate, and
+ * the agent's tool trace when it used any. */
 export function MessageActions({
   createdAt,
   content,
@@ -65,7 +65,9 @@ export function MessageActions({
       >
         <span>{timeOf(createdAt)}</span>
 
-        <div className="flex items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
+        {/* Always shown: these are primary affordances, and hiding them
+            behind hover made them undiscoverable (and unusable on touch). */}
+        <div className="flex items-center">
           <Button
             variant="ghost"
             size="icon-sm"

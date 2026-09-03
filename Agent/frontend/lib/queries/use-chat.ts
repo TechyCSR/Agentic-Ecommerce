@@ -74,6 +74,23 @@ export function useDeleteSession() {
   });
 }
 
+/** Drops a message and everything after it, so an edited or regenerated
+ * turn replaces the old one instead of stacking on top of it. */
+export function useTruncateSession() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ sessionId, messageId }: { sessionId: string; messageId: string }) =>
+      api.post<{ removed: number }>(`/api/v1/chat/sessions/${sessionId}/truncate`, {
+        message_id: messageId,
+      }),
+    onSuccess: (_d, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["chat-session", variables.sessionId] });
+    },
+  });
+}
+
 export interface StreamState {
   isStreaming: boolean;
   sessionId: string | null;
