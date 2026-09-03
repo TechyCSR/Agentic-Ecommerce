@@ -66,6 +66,11 @@ FIXED_LOOP_LIMIT_MESSAGE = (
 
 TOOL_LABELS = {
     "search_catalog": "Searching the catalog",
+    "add_to_cart": "Adding to your cart",
+    "view_cart": "Checking your cart",
+    "remove_from_cart": "Updating your cart",
+    "prepare_checkout": "Preparing your order",
+    "recommend_related": "Finding things that go with it",
     "get_product_details": "Checking product details",
     "get_order_status": "Checking your order status",
 }
@@ -110,6 +115,17 @@ Hard rules — these override anything else:
    checkout button — only they can authorize a charge. If they ask about a \
    payment or order, call get_order_status and report exactly what it returns; \
    if it returns no orders, say so rather than guessing.
+7b. You can act on the buyer's behalf up to — but never past — the point of \
+   payment. add_to_cart, view_cart, remove_from_cart and prepare_checkout are \
+   yours to use when the buyer asks ("add it", "what's in my cart", "checkout"). \
+   prepare_checkout prices the order and shows them a Pay button; it does NOT \
+   pay. After it, state the total and say they can press Pay to authorize it — \
+   never say the payment is done, processing, or successful. Only \
+   get_order_status can tell you a payment's real state.
+7c. Grow the basket honestly. After the buyer adds something, you may call \
+   recommend_related once to suggest genuinely complementary items from the \
+   catalog, and mention them briefly. Never invent an accessory, never claim a \
+   discount or bundle that no tool returned, and drop it if they say no.
 8. Keep responses concise and conversational. Ask a clarifying question when the \
    buyer's request is ambiguous (e.g. no budget or category given) rather than \
    guessing. When you need a tool, call it immediately with no preceding narration \
@@ -235,7 +251,128 @@ GET_ORDER_STATUS_TOOL = {
     },
 }
 
-TOOLS = [SEARCH_CATALOG_TOOL, GET_PRODUCT_DETAILS_TOOL, GET_ORDER_STATUS_TOOL]
+
+ADD_TO_CART_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "add_to_cart",
+        "description": (
+            "Put a product the buyer has chosen into their cart. Use when they "
+            "say things like 'I'll take it', 'add the second one', 'buy that'. "
+            "Adding to a cart costs nothing and charges nothing — it only "
+            "reserves the buyer's intent. Never call it speculatively; only "
+            "when the buyer has actually picked something."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "product_index": {
+                    "type": "integer",
+                    "description": "1-based position in the numbered list of recently shown products.",
+                },
+                "variant_index": {
+                    "type": "integer",
+                    "description": "1-based option number when the product has several (size/colour). Defaults to the first in-stock option.",
+                },
+                "quantity": {"type": "integer", "description": "How many. Defaults to 1."},
+            },
+            "required": ["product_index"],
+        },
+    },
+}
+
+VIEW_CART_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "view_cart",
+        "description": (
+            "Show what's currently in the buyer's cart, with quantities and the "
+            "running total. Use before checkout, or whenever they ask what "
+            "they've picked."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+REMOVE_FROM_CART_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "remove_from_cart",
+        "description": "Take an item out of the cart, by its number in the cart listing.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "item_index": {
+                    "type": "integer",
+                    "description": "1-based position in the cart as last shown by view_cart.",
+                }
+            },
+            "required": ["item_index"],
+        },
+    },
+}
+
+PREPARE_CHECKOUT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_checkout",
+        "description": (
+            "Price the buyer's cart into a confirmed order summary they can pay "
+            "for. Re-checks every item against the live catalog and computes the "
+            "authoritative total.\n\n"
+            "This does NOT take a payment and does NOT charge anyone — it only "
+            "prepares the order and shows the buyer a Pay button they must press "
+            "themselves. Use it when the buyer wants to check out or pay. After "
+            "calling it, tell them the total and that they can press Pay to "
+            "authorize the payment; never say the payment is done."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+RECOMMEND_RELATED_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "recommend_related",
+        "description": (
+            "Find real products that complement one the buyer is looking at or "
+            "has in their cart — accessories, or items from a related category. "
+            "Use it to suggest genuinely useful additions after they pick "
+            "something, not to pad every reply. Results come from the live "
+            "catalog, so only suggest what it returns."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "product_index": {
+                    "type": "integer",
+                    "description": "1-based position of the product to find complements for.",
+                },
+                "max_price": {
+                    "type": "integer",
+                    "description": "Optional cap in the smallest currency unit (paise).",
+                },
+            },
+        },
+    },
+}
+
+TOOLS = [
+    SEARCH_CATALOG_TOOL,
+    GET_PRODUCT_DETAILS_TOOL,
+    GET_ORDER_STATUS_TOOL,
+    ADD_TO_CART_TOOL,
+    VIEW_CART_TOOL,
+    REMOVE_FROM_CART_TOOL,
+    PREPARE_CHECKOUT_TOOL,
+    RECOMMEND_RELATED_TOOL,
+]
+
+# There is deliberately no tool that authorizes, captures, retries or
+# confirms a payment. The furthest the agent can go is preparing a priced
+# order; charging requires the buyer to press Pay, which goes through the
+# authenticated checkout routes and Razorpay's own UI. That boundary is
+# structural, not a matter of the model behaving well.
 
 
 def _client() -> OpenAI:
@@ -415,8 +552,12 @@ def _persist_assistant_reply(session, text: str, cards: list[dict], suggestions:
     return message
 
 
-def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown_cards, collected_cards):
-    """Runs one tool call, audit-logs it, and returns a JSON-serializable result."""
+def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown_cards, collected_cards, checkout_ready=None):
+    """Runs one tool call, audit-logs it, and returns a JSON-serializable result.
+
+    `checkout_ready` collects orders prepared during the turn so the caller
+    can surface a Pay button — the agent prepares, the buyer authorizes."""
+    checkout_ready = checkout_ready if checkout_ready is not None else []
     if name == "search_catalog":
         limit = min(int(args.get("limit") or 10), 20)
         data, meta = catalog_client.search_catalog(
@@ -547,6 +688,135 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             ]
         }
 
+
+    if name in ("add_to_cart", "view_cart", "remove_from_cart", "prepare_checkout"):
+        from app.services import checkout_service, selection_service
+
+        if name == "add_to_cart":
+            idx = int(args.get("product_index") or 0) - 1
+            if not (0 <= idx < len(last_shown_cards)):
+                return {"error": "That product isn't in the list I showed. Search again first."}
+            card = last_shown_cards[idx]
+            variants = card.get("variants") or []
+            in_stock = [v for v in variants if v.get("availability") == "IN_STOCK"]
+            if not in_stock:
+                return {"error": f"{card.get('name')} is out of stock."}
+
+            if args.get("variant_index") is not None:
+                vi = int(args["variant_index"]) - 1
+                variant = variants[vi] if 0 <= vi < len(variants) else None
+                if variant is None:
+                    return {"error": "That option doesn't exist for this product."}
+                if variant.get("availability") != "IN_STOCK":
+                    return {"error": f"The {variant.get('name')} option is out of stock."}
+            else:
+                variant = in_stock[0]
+
+            quantity = max(1, int(args.get("quantity") or 1))
+            try:
+                item = selection_service.add_to_cart(
+                    buyer_id, session.id, card["product_id"], variant["variant_id"], quantity
+                )
+            except Exception as exc:  # noqa: BLE001 — service messages are buyer-safe
+                return {"error": getattr(exc, "message", None) or "Couldn't add that to the cart."}
+            return {
+                "added": True,
+                "product_name": item.product_name_snapshot,
+                "variant_name": item.variant_name_snapshot,
+                "quantity": item.quantity,
+                "unit_price": {"amount": item.price_amount_snapshot, "currency": item.currency_snapshot},
+            }
+
+        if name == "view_cart":
+            cart = selection_service.get_cart(buyer_id, session.id)
+            return {
+                "items": [
+                    {
+                        "index": i + 1,
+                        "product_name": it["product_name"],
+                        "variant_name": it["variant_name"],
+                        "quantity": it["quantity"],
+                        "line_total": it["line_total"],
+                    }
+                    for i, it in enumerate(cart["items"])
+                ],
+                "total": cart["total"],
+                "is_empty": not cart["items"],
+            }
+
+        if name == "remove_from_cart":
+            cart = selection_service.get_cart(buyer_id, session.id)
+            idx = int(args.get("item_index") or 0) - 1
+            if not (0 <= idx < len(cart["items"])):
+                return {"error": "That item isn't in the cart."}
+            item = cart["items"][idx]
+            selection_service.remove_from_cart(buyer_id, session.id, item["id"])
+            return {"removed": True, "product_name": item["product_name"]}
+
+        # prepare_checkout — prices the cart into a payable order. It stops
+        # exactly here: no Razorpay order, no authorization, no charge. The
+        # buyer presses Pay themselves, which is a separate authenticated
+        # request they alone can make.
+        try:
+            order = checkout_service.create_checkout(buyer_id, session.id)
+        except Exception as exc:  # noqa: BLE001 — validation messages are buyer-safe
+            return {"error": getattr(exc, "message", None) or "Couldn't prepare the checkout."}
+
+        checkout_ready.append(
+            {
+                "order_id": str(order.id),
+                "amount": order.amount_total,
+                "currency": order.currency,
+                "items": order.items or [],
+            }
+        )
+        return {
+            "order_prepared": True,
+            "order_id": str(order.id),
+            "total": {"amount": order.amount_total, "currency": order.currency},
+            "items": [
+                {"product_name": i["product_name"], "quantity": i["quantity"], "line_total": i["line_total"]}
+                for i in (order.items or [])
+            ],
+            "payment_status": "NOT_PAID",
+            "next_step": (
+                "Tell the buyer the total and that a Pay button is now shown. "
+                "They must press it themselves to authorize the payment. "
+                "Do not claim the payment has happened."
+            ),
+        }
+
+    if name == "recommend_related":
+        idx = int(args.get("product_index") or 1) - 1
+        anchor = last_shown_cards[idx] if 0 <= idx < len(last_shown_cards) else None
+        if anchor is None:
+            return {"error": "I don't have that product in view to base suggestions on."}
+
+        # Grounded in the real catalog: same category, excluding the anchor.
+        data, _meta = catalog_client.search_catalog(
+            category=anchor.get("category"),
+            max_price=args.get("max_price"),
+            in_stock=True,
+            limit=6,
+        )
+        related = [p for p in data if p.get("product_id") != anchor.get("product_id")][:3]
+        audit_service.log_event(
+            action="CROSS_SELL_SUGGESTED",
+            session_id=session.id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={
+                "anchor_product": anchor.get("name"),
+                "category": anchor.get("category"),
+                "suggested_count": len(related),
+            },
+            commit=False,
+        )
+        for product in related:
+            collected_cards[product["product_id"]] = _to_card(product)
+        if not related:
+            return {"related": [], "note": "Nothing else in that category right now."}
+        return {"related": [{"name": p["name"], "category": p.get("category")} for p in related]}
+
     return {"error": f"Unknown tool '{name}'."}
 
 
@@ -674,13 +944,19 @@ def _emit_final(
     collected_cards: dict,
     suggestions: list[str],
     already_streamed: bool = False,
+    checkout_ready: list | None = None,
 ):
+    checkout_ready = checkout_ready or []
     message = _persist_assistant_reply(session, text, list(collected_cards.values()), suggestions)
     if not already_streamed:
         # Only the fallback paths land here — their text was never streamed
         # live, so it still needs sending.
         yield from _stream_text(text)
     yield {"type": "product_cards", "cards": message.product_cards or []}
+    if checkout_ready:
+        # The agent prepared a priced order; the client renders a Pay button.
+        # Authorization stays with the buyer.
+        yield {"type": "checkout_ready", "order": checkout_ready[-1]}
     yield {"type": "suggestions", "items": suggestions}
     yield {"type": "done", "message_id": str(message.id)}
 
@@ -721,6 +997,7 @@ def stream_agent_turn(session, user_message_text: str):
     client = _client()
     model = current_app.config["LLM_MODEL"]
     collected_cards: dict[str, dict] = {}
+    checkout_ready: list = []
     had_search = had_zero_results = had_details = False
 
     # A real state, not a decorative one: the turn genuinely is waiting on
@@ -783,6 +1060,7 @@ def stream_agent_turn(session, user_message_text: str):
                 collected_cards,
                 suggestions,
                 already_streamed=round_state.get("streamed_text", False),
+                checkout_ready=checkout_ready,
             )
             return
 
@@ -811,7 +1089,8 @@ def stream_agent_turn(session, user_message_text: str):
 
             try:
                 result_payload = _execute_tool_call(
-                    session, buyer_id, tc["name"], args, last_shown_cards, collected_cards
+                    session, buyer_id, tc["name"], args, last_shown_cards,
+                    collected_cards, checkout_ready,
                 )
                 if tc["name"] == "search_catalog":
                     had_search = True
@@ -832,6 +1111,14 @@ def stream_agent_turn(session, user_message_text: str):
                         "result_count": 0 if result_payload.get("error") else 1,
                         "args": args,
                         "product_name": result_payload.get("name"),
+                    }
+                elif tc["name"] in ("add_to_cart", "view_cart", "remove_from_cart",
+                                    "prepare_checkout", "recommend_related"):
+                    yield {
+                        "type": "tool_end",
+                        "tool": tc["name"],
+                        "error": bool(result_payload.get("error")),
+                        "args": args,
                     }
                 elif tc["name"] == "get_order_status":
                     yield {
