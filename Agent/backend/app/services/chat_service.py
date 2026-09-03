@@ -44,6 +44,12 @@ def rename_session(buyer_id: str, session_id: str, title: str) -> ChatSession:
 
 def delete_session(buyer_id: str, session_id: str) -> None:
     session = get_session_for_buyer(buyer_id, session_id)
+    # A Telegram link may point at this session; the FK would otherwise
+    # block the delete with a 500. Clearing it just starts that user a
+    # fresh conversation next message.
+    from app.models import TelegramLink
+
+    TelegramLink.query.filter_by(session_id=session.id).update({"session_id": None})
     db.session.delete(session)
     db.session.commit()
 

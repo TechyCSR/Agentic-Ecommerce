@@ -5,13 +5,20 @@ Nothing here is a second implementation of anything. Messages go through
 checkout and audit trail the web chat uses. This module only translates
 between Telegram's API and that existing flow.
 
-Account scoping is the one thing worth reading closely: every account-aware
-operation keys off `TelegramLink.buyer_id()`. A linked user resolves to
-their Clerk id; an unlinked one resolves to a namespaced `tg:<id>` that
-simply owns no orders. So "don't leak another user's data" needs no special
-case — an unlinked Telegram user queries their own empty world, and a linked
-one can only ever reach the account their Telegram id is mapped to. Order
-ids from the user are never trusted as a lookup key.
+Two Telegram-specific constraints shape the code:
+
+* **callback_data is capped at 64 bytes.** Two UUIDs need 77, so buttons
+  carry a small index into `TelegramLink.last_cards` and the real ids are
+  resolved server-side. (Truncating instead silently corrupted every
+  selection into "This variant is no longer available.")
+* **Markdown mode rejects the whole message** when `*`/`_`/`[` are
+  unbalanced, which LLM prose does constantly. Everything is rendered as a
+  safe HTML subset, with a plain-text retry so a reply can never vanish.
+
+Account scoping: every account-aware operation keys off
+`TelegramLink.buyer_id()`. A linked user resolves to their Clerk id; an
+unlinked one to a namespaced `tg:<id>` that owns nothing. Order ids from the
+user are never trusted as a lookup key.
 """
 
 import threading
@@ -23,40 +30,45 @@ from flask import current_app
 from app.extensions import db
 from app.models import BuyerProfile, ChatSession, TelegramLink
 from app.services import audit_service, checkout_service, selection_service
+from app.utils.telegram_format import markdown_to_telegram_html, plain_text
 
 API_BASE = "https://api.telegram.org"
 SEND_TIMEOUT = 15
-# Telegram caps a message at 4096 chars; leave room for our own formatting.
 MAX_MESSAGE = 3500
-# How many products to push as rich cards before falling back to a summary.
 MAX_PRODUCT_CARDS = 4
+MAX_GALLERY_IMAGES = 4
 
 WELCOME = (
-    "*Welcome to Agentic Commerce.*\n\n"
+    "<b>Welcome to Agentic Commerce.</b>\n\n"
     "I can help you discover products, compare options, answer product "
     "questions, and help you complete a purchase.\n\n"
-    "To connect your existing account, use:\n"
-    "`/login your-email@example.com`\n\n"
-    "If you don't have an existing account, you can still explore products.\n\n"
-    "*Commands*\n"
-    "/login <email> — Connect your account\n"
-    "/logout — Disconnect your account\n"
-    "/help — Show available commands"
+    "To connect your existing account:\n"
+    "<code>/login your-email@example.com</code>\n\n"
+    "You can browse and ask about products without logging in — you'll only "
+    "need an account to check out or see your orders."
 )
 
 HELP = (
-    "*Commands*\n"
-    "/login <email> — Connect your account\n"
+    "<b>Commands</b>\n"
+    "/login &lt;email&gt; — Connect your account\n"
     "/logout — Disconnect your account\n"
-    "/help — Show available commands\n\n"
+    "/cart — See what's in your cart\n"
+    "/orders — Your recent orders and payment status\n"
+    "/help — Show this message\n\n"
     "You can chat naturally with me to search, compare, and purchase products."
 )
 
 TOOL_NOTICES = {
-    "search_catalog": "🔎 Searching products...",
-    "get_product_details": "📦 Checking product details...",
-    "get_order_status": "✓ Finding your latest order...",
+    "search_catalog": "🔎 Searching products…",
+    "get_product_details": "📦 Checking product details…",
+    "get_order_status": "🧾 Finding your latest order…",
 }
+
+LOGIN_PROMPT = (
+    "You'll need to connect your account for that.\n\n"
+    "<code>/login your-email@example.com</code>\n\n"
+    "Use the same email you sign in with on the web app."
+)
 
 
 # ---- Telegram API ----
@@ -76,27 +88,56 @@ def _api(method: str, payload: dict):
         )
         return resp.json()
     except requests.RequestException:
-        # A failed send must never break the turn that triggered it.
         return None
 
 
-def send_message(chat_id: int, text: str, buttons: list | None = None, preview: bool = False):
+def send_message(chat_id: int, html_text: str, buttons: list | None = None, preview: bool = False):
+    """Sends HTML, falling back to plain text if Telegram still objects, so a
+    reply is never silently dropped."""
     payload = {
         "chat_id": chat_id,
-        "text": text[:MAX_MESSAGE],
-        "parse_mode": "Markdown",
+        "text": html_text[:MAX_MESSAGE],
+        "parse_mode": "HTML",
         "link_preview_options": {"is_disabled": not preview},
     }
     if buttons:
         payload["reply_markup"] = {"inline_keyboard": buttons}
+
+    result = _api("sendMessage", payload)
+    if result and result.get("ok"):
+        return result
+
+    payload.pop("parse_mode", None)
+    payload["text"] = plain_text(html_text)[:MAX_MESSAGE]
     return _api("sendMessage", payload)
 
 
-def send_photo(chat_id: int, photo_url: str, caption: str, buttons: list | None = None):
-    payload = {"chat_id": chat_id, "photo": photo_url, "caption": caption[:1000], "parse_mode": "Markdown"}
+def send_markdown(chat_id: int, markdown_text: str, buttons: list | None = None, preview: bool = False):
+    return send_message(chat_id, markdown_to_telegram_html(markdown_text), buttons, preview)
+
+
+def send_photo(chat_id: int, photo_url: str, caption_html: str, buttons: list | None = None):
+    payload = {
+        "chat_id": chat_id,
+        "photo": photo_url,
+        "caption": caption_html[:1000],
+        "parse_mode": "HTML",
+    }
     if buttons:
         payload["reply_markup"] = {"inline_keyboard": buttons}
     return _api("sendPhoto", payload)
+
+
+def send_gallery(chat_id: int, image_urls: list, caption_html: str):
+    """Multiple product photos as one swipeable album."""
+    media = []
+    for i, url in enumerate(image_urls[:MAX_GALLERY_IMAGES]):
+        item = {"type": "photo", "media": url}
+        if i == 0:
+            item["caption"] = caption_html[:1000]
+            item["parse_mode"] = "HTML"
+        media.append(item)
+    return _api("sendMediaGroup", {"chat_id": chat_id, "media": media})
 
 
 def answer_callback(callback_id: str, text: str = ""):
@@ -127,12 +168,10 @@ def get_or_create_link(tg_user: dict, chat_id: int) -> TelegramLink:
 
 
 def get_session(link: TelegramLink) -> ChatSession:
-    """One long-running conversation per Telegram user, so context carries
-    across messages the way it does on the web."""
     session = ChatSession.query.get(link.session_id) if link.session_id else None
     # A session belongs to a buyer id; after login/logout the identity
-    # changes, so a fresh session is started rather than leaking the
-    # previous identity's conversation.
+    # changes, so a fresh one starts rather than carrying the old identity's
+    # conversation across.
     if session is None or session.buyer_clerk_user_id != link.buyer_id():
         session = ChatSession(buyer_clerk_user_id=link.buyer_id(), title="Telegram chat")
         db.session.add(session)
@@ -143,35 +182,81 @@ def get_session(link: TelegramLink) -> ChatSession:
 
 
 def login(link: TelegramLink, email: str) -> tuple[bool, str]:
-    email = (email or "").strip().lower()
-    if not email or "@" not in email:
-        return False, "Please provide a valid email, like `/login you@example.com`"
+    email = (email or "").strip().lower().strip("<>")
+    if not email or "@" not in email or " " in email:
+        return False, "Please provide a valid email, like <code>/login you@example.com</code>"
 
-    profile = BuyerProfile.query.filter(
-        db.func.lower(BuyerProfile.email) == email
-    ).first()
+    profile = BuyerProfile.query.filter(db.func.lower(BuyerProfile.email) == email).first()
     if profile is None:
         return False, (
             "We couldn't find an account with that email.\n\n"
-            "Please use an existing account email — sign in on the web app first "
-            "if you haven't already."
+            "Sign in at <a href=\"https://agent.techycsr.dev\">agent.techycsr.dev</a> "
+            "with this email first, send one message there, then try "
+            "<code>/login</code> again."
         )
+
+    previous_buyer = link.buyer_id()
+    previous_session_id = link.session_id
+    switching_account = link.is_linked and link.buyer_clerk_user_id != profile.clerk_user_id
 
     link.buyer_clerk_user_id = profile.clerk_user_id
     link.linked_email = profile.email
     link.linked_at = datetime.now(timezone.utc)
-    link.session_id = None  # start a session under the newly linked identity
+    link.session_id = None
     db.session.commit()
+
+    # Carry a cart built while logged out into the account they just
+    # connected — otherwise "add to cart, then log in to pay" silently loses
+    # everything and checkout reports an empty cart. Not done when switching
+    # between two real accounts, where the items belong to the first one.
+    moved = 0
+    if previous_session_id and not switching_account and previous_buyer.startswith("tg:"):
+        moved = _migrate_guest_cart(previous_buyer, previous_session_id, link)
 
     audit_service.log_event(
         action="TELEGRAM_ACCOUNT_LINKED",
         buyer_clerk_user_id=profile.clerk_user_id,
         metadata={"telegram_user_id": link.telegram_user_id, "email": profile.email},
     )
-    return True, (
-        "✓ Your Telegram account is now connected.\n\n"
+    message = (
+        "✅ <b>Your Telegram account is now connected.</b>\n\n"
         "You can continue your shopping conversations and access your orders here."
     )
+    if moved:
+        message += (
+            f"\n\nI also moved {moved} item{'s' if moved != 1 else ''} from your "
+            "cart into this account — say <b>checkout</b> when you're ready."
+        )
+    else:
+        message += "\n\nTry “find me a mechanical keyboard under ₹5,000”, or /orders."
+    return True, message
+
+
+def _migrate_guest_cart(previous_buyer: str, previous_session_id, link: TelegramLink) -> int:
+    """Moves a logged-out cart onto the account that just connected."""
+    from app.models import SelectedProduct
+    from app.models.enums import SelectionStatus
+
+    items = SelectedProduct.query.filter_by(
+        session_id=previous_session_id,
+        buyer_clerk_user_id=previous_buyer,
+        status=SelectionStatus.SELECTED,
+    ).all()
+    if not items:
+        return 0
+
+    session = get_session(link)  # session for the newly linked identity
+    for item in items:
+        item.session_id = session.id
+        item.buyer_clerk_user_id = link.buyer_clerk_user_id
+    db.session.commit()
+
+    audit_service.log_event(
+        action="TELEGRAM_GUEST_CART_MIGRATED",
+        buyer_clerk_user_id=link.buyer_clerk_user_id,
+        metadata={"items": len(items), "from_buyer": previous_buyer},
+    )
+    return len(items)
 
 
 def logout(link: TelegramLink) -> str:
@@ -181,65 +266,113 @@ def logout(link: TelegramLink) -> str:
     link.buyer_clerk_user_id = None
     link.linked_email = None
     link.linked_at = None
-    link.session_id = None  # don't leave the linked conversation reachable
+    link.session_id = None
+    link.last_cards = None
+    link.last_suggestions = None
     db.session.commit()
     audit_service.log_event(
         action="TELEGRAM_ACCOUNT_UNLINKED",
         buyer_clerk_user_id=previous,
         metadata={"telegram_user_id": link.telegram_user_id},
     )
-    return "You have been logged out successfully."
+    return (
+        "You have been logged out successfully.\n\n"
+        "You can still browse products — log in again any time with "
+        "<code>/login your-email@example.com</code>"
+    )
 
 
-# ---- Agent bridge ----
+# ---- Rendering ----
 
 
-def _product_buttons(card: dict, link: TelegramLink) -> list:
+def _money(amount, currency="INR") -> str:
+    if amount is None:
+        return "—"
+    symbol = "₹" if currency == "INR" else f"{currency} "
+    return f"{symbol}{amount / 100:,.0f}"
+
+
+def _card_caption(card: dict) -> str:
+    price = card.get("price") or {}
+    parts = [f"<b>{markdown_to_telegram_html(card.get('name') or 'Product')}</b>"]
+    line = _money(price.get("amount"), price.get("currency", "INR"))
+    if card.get("brand"):
+        line += f"  ·  {markdown_to_telegram_html(card['brand'])}"
+    parts.append(line)
+
+    desc = (card.get("description") or "").strip()
+    if desc:
+        if len(desc) > 200:
+            desc = desc[:200].rsplit(" ", 1)[0] + "…"
+        parts.append(markdown_to_telegram_html(desc))
+
     variants = card.get("variants") or []
-    in_stock = next((v for v in variants if v.get("availability") == "IN_STOCK"), None)
+    in_stock = [v for v in variants if v.get("availability") == "IN_STOCK"]
+    if not in_stock:
+        parts.append("<i>Currently out of stock</i>")
+    elif len(in_stock) > 1:
+        parts.append(f"<i>{len(in_stock)} options available</i>")
+    return "\n\n".join(parts)
+
+
+def _card_buttons(card_index: int, card: dict) -> list:
+    """All callback_data stays far under Telegram's 64-byte cap by carrying
+    indexes instead of UUIDs."""
+    variants = card.get("variants") or []
     buttons = []
-    if in_stock:
-        buttons.append(
-            [{
-                "text": "🛒 Select product",
-                "callback_data": f"sel:{card['product_id']}:{in_stock['variant_id']}"[:64],
-            }]
-        )
+    in_stock = [(i, v) for i, v in enumerate(variants) if v.get("availability") == "IN_STOCK"]
+
+    if len(in_stock) == 1:
+        buttons.append([{"text": "🛒 Add to cart", "callback_data": f"sel:{card_index}:{in_stock[0][0]}"}])
+    elif len(in_stock) > 1:
+        # One button per option, so the buyer picks the variant explicitly.
+        for vi, v in in_stock[:3]:
+            label = (v.get("name") or "Option")[:20]
+            buttons.append(
+                [{"text": f"🛒 {label} · {_money((v.get('price') or {}).get('amount'))}",
+                  "callback_data": f"sel:{card_index}:{vi}"}]
+            )
+    if (card.get("images") or []) and len(card["images"]) > 1:
+        buttons.append([{"text": "🖼 More photos", "callback_data": f"pic:{card_index}"}])
     return buttons
 
 
+def _remember(link: TelegramLink, cards=None, suggestions=None):
+    if cards is not None:
+        link.last_cards = cards
+    if suggestions is not None:
+        link.last_suggestions = suggestions
+    db.session.commit()
+
+
 def _send_products(chat_id: int, cards: list, link: TelegramLink):
-    for card in cards[:MAX_PRODUCT_CARDS]:
-        price = card.get("price") or {}
-        amount = price.get("amount")
-        price_text = f"₹{amount / 100:,.0f}" if amount else "Price unavailable"
-        desc = (card.get("description") or "").strip()
-        if len(desc) > 180:
-            desc = desc[:180].rsplit(" ", 1)[0] + "…"
-
-        caption = f"*{card.get('name')}*\n\n{price_text}"
-        if card.get("brand"):
-            caption += f"  ·  {card['brand']}"
-        if desc:
-            caption += f"\n\n{desc}"
-        if card.get("availability") != "IN_STOCK":
-            caption += "\n\n_Currently out of stock_"
-
-        buttons = _product_buttons(card, link)
+    for idx, card in enumerate(cards[:MAX_PRODUCT_CARDS]):
+        caption = _card_caption(card)
+        buttons = _card_buttons(idx, card)
         image = card.get("image_url")
         if image:
             sent = send_photo(chat_id, image, caption, buttons)
             if sent and sent.get("ok"):
                 continue
-        # Photo can fail on an unreachable image host; text still works.
+        # An unreachable image host must not cost the buyer the product.
         send_message(chat_id, caption, buttons)
 
     if len(cards) > MAX_PRODUCT_CARDS:
-        send_message(chat_id, f"_…and {len(cards) - MAX_PRODUCT_CARDS} more. Ask me to narrow it down._")
+        send_message(
+            chat_id,
+            f"<i>…and {len(cards) - MAX_PRODUCT_CARDS} more. Tell me your budget or "
+            "brand and I'll narrow it down.</i>",
+        )
+
+
+def _suggestion_buttons(suggestions: list) -> list:
+    return [[{"text": s[:40], "callback_data": f"sug:{i}"}] for i, s in enumerate(suggestions[:4])]
+
+
+# ---- Agent bridge ----
 
 
 def handle_agent_message(link: TelegramLink, text: str):
-    """Runs one turn through the existing agent and renders it for Telegram."""
     from app.services import chat_service
 
     chat_id = link.telegram_chat_id
@@ -248,6 +381,7 @@ def handle_agent_message(link: TelegramLink, text: str):
 
     reply = ""
     cards: list = []
+    suggestions: list = []
     notified: set = set()
 
     try:
@@ -258,13 +392,16 @@ def handle_agent_message(link: TelegramLink, text: str):
             elif kind == "retract":
                 reply = ""
             elif kind == "tool_start":
-                notice = TOOL_NOTICES.get(event.get("tool"))
-                # One notice per tool per turn, so a multi-step turn doesn't spam.
-                if notice and event.get("tool") not in notified:
-                    notified.add(event.get("tool"))
+                tool = event.get("tool")
+                notice = TOOL_NOTICES.get(tool)
+                if notice and tool not in notified:
+                    notified.add(tool)
                     send_message(chat_id, notice)
+                    send_typing(chat_id)
             elif kind == "product_cards":
                 cards = event.get("cards") or []
+            elif kind == "suggestions":
+                suggestions = event.get("items") or []
             elif kind == "error":
                 send_message(chat_id, "Something went wrong while processing your request. Please try again.")
                 return
@@ -272,88 +409,175 @@ def handle_agent_message(link: TelegramLink, text: str):
         send_message(chat_id, "Something went wrong while processing your request. Please try again.")
         return
 
+    _remember(link, cards=cards, suggestions=suggestions)
+
     if reply.strip():
-        send_message(chat_id, reply.strip())
+        send_markdown(chat_id, reply.strip())
     if cards:
         _send_products(chat_id, cards, link)
 
-    # An unlinked user asking about their own orders gets a nudge rather than
-    # a confusing "you have no orders".
+    follow_ups = list(suggestions)
+    if cards and link.is_linked:
+        follow_ups = follow_ups[:3]
     if not link.is_linked and _looks_account_scoped(text):
-        send_message(
-            chat_id,
-            "To see your orders and payment status here, connect your account "
-            "with `/login your-email@example.com`",
-        )
+        send_message(chat_id, LOGIN_PROMPT)
+    elif follow_ups:
+        send_message(chat_id, "<i>What next?</i>", _suggestion_buttons(follow_ups))
 
 
 def _looks_account_scoped(text: str) -> bool:
     lowered = (text or "").lower()
     return any(
         kw in lowered
-        for kw in ("my order", "my payment", "did my payment", "order status", "receipt", "my purchase")
+        for kw in ("my order", "my payment", "did my payment", "order status",
+                   "receipt", "my purchase", "my cart")
     )
 
 
-# ---- Selection and checkout ----
+# ---- Cart, checkout, orders ----
 
 
-def handle_selection(link: TelegramLink, product_id: str, variant_id: str) -> str:
-    """Reuses the existing cart logic — same validation, same stock checks."""
+def handle_selection(link: TelegramLink, card_index: int, variant_index: int) -> tuple[str, list | None]:
+    cards = link.last_cards or []
+    if card_index >= len(cards):
+        return ("That product is no longer in view — search again and I'll show it.", None)
+
+    card = cards[card_index]
+    variants = card.get("variants") or []
+    if variant_index >= len(variants):
+        return ("That option is no longer available.", None)
+
+    variant = variants[variant_index]
     session = get_session(link)
     try:
-        selection_service.add_to_cart(link.buyer_id(), session.id, product_id, variant_id, 1)
-    except Exception as exc:  # noqa: BLE001 — surface the service's own message
-        return getattr(exc, "message", None) or "That product couldn't be selected right now."
+        selection_service.add_to_cart(
+            link.buyer_id(), session.id, card["product_id"], variant["variant_id"], 1
+        )
+    except Exception as exc:  # noqa: BLE001 — service messages are buyer-safe
+        return (getattr(exc, "message", None) or "That product couldn't be added right now.", None)
+
+    name = markdown_to_telegram_html(card.get("name") or "Item")
+    price = _money((variant.get("price") or {}).get("amount"))
+    body = f"✅ <b>Added to cart</b>\n\n{name} · {variant.get('name')} — {price}"
 
     if not link.is_linked:
         return (
-            "✓ Added to your cart.\n\n"
-            "To check out, connect your account first with "
-            "`/login your-email@example.com`"
+            body + "\n\nTo check out you'll need an account:\n"
+            "<code>/login your-email@example.com</code>",
+            None,
         )
-    return "✓ Added to your cart. Say *checkout* when you're ready to pay."
+    return (
+        body + "\n\nSay <b>checkout</b> when you're ready, or keep browsing.",
+        [[{"text": "🧾 View cart", "callback_data": "cart"}],
+         [{"text": "💳 Checkout", "callback_data": "co"}]],
+    )
+
+
+def cart_summary(link: TelegramLink) -> tuple[str, list | None]:
+    if not link.is_linked:
+        # An unlinked user still has a cart under their tg: identity.
+        session = get_session(link)
+        cart = selection_service.get_cart(link.buyer_id(), session.id)
+        if not cart["items"]:
+            return ("Your cart is empty. Tell me what you're looking for.", None)
+        lines = "\n".join(
+            f"• {i['quantity']} × {markdown_to_telegram_html(i['product_name'])} — "
+            f"{_money(i['line_total']['amount'], i['line_total']['currency'])}"
+            for i in cart["items"]
+        )
+        return (
+            f"<b>Your cart</b>\n\n{lines}\n\n"
+            f"<b>Total: {_money(cart['total']['amount'], cart['total']['currency'])}</b>\n\n"
+            + LOGIN_PROMPT,
+            None,
+        )
+
+    session = get_session(link)
+    cart = selection_service.get_cart(link.buyer_id(), session.id)
+    if not cart["items"]:
+        return ("Your cart is empty. Tell me what you're looking for.", None)
+
+    lines = "\n".join(
+        f"• {i['quantity']} × {markdown_to_telegram_html(i['product_name'])} — "
+        f"{_money(i['line_total']['amount'], i['line_total']['currency'])}"
+        for i in cart["items"]
+    )
+    return (
+        f"<b>Your cart</b>\n\n{lines}\n\n"
+        f"<b>Total: {_money(cart['total']['amount'], cart['total']['currency'])}</b>",
+        [[{"text": "💳 Checkout", "callback_data": "co"}]],
+    )
 
 
 def create_checkout_link(link: TelegramLink) -> tuple[str, list | None]:
-    """Prepares an order with the existing checkout service and hands back a
-    link to the deployed web checkout. Telegram never takes a payment."""
     if not link.is_linked:
         return (
-            "To check out, connect your account first with `/login your-email@example.com`",
+            "Checkout needs a connected account, so your order is tied to you.\n\n" + LOGIN_PROMPT,
             None,
         )
 
     session = get_session(link)
     try:
         order = checkout_service.create_checkout(link.buyer_id(), session.id)
-    except Exception as exc:  # noqa: BLE001 — service messages are already buyer-safe
+    except Exception as exc:  # noqa: BLE001 — service messages are buyer-safe
         return (
-            getattr(exc, "message", None) or "I couldn't prepare your checkout right now.",
+            markdown_to_telegram_html(
+                getattr(exc, "message", None) or "I couldn't prepare your checkout right now."
+            ),
             None,
         )
 
     web_url = (current_app.config.get("AGENT_WEB_URL") or "").rstrip("/")
     lines = "\n".join(
-        f"• {i['quantity']} × {i['product_name']} — ₹{i['line_total']['amount'] / 100:,.0f}"
+        f"• {i['quantity']} × {markdown_to_telegram_html(i['product_name'])} — "
+        f"{_money(i['line_total']['amount'], i['line_total']['currency'])}"
         for i in (order.items or [])
     )
     text = (
-        "*Your order is ready.*\n\n"
+        "<b>Your order is ready.</b>\n\n"
         f"{lines}\n\n"
-        f"*Total: ₹{order.amount_total / 100:,.0f}*\n\n"
-        "Payment is completed securely on the web checkout — "
-        "I can't take a payment here."
+        f"<b>Total: {_money(order.amount_total, order.currency)}</b>\n\n"
+        "Payment happens securely on the web checkout — I can't take a payment here. "
+        "Come back afterwards and ask “did my payment go through?”"
     )
-    buttons = [[{"text": "🛒 Complete Payment", "url": f"{web_url}/?order={order.id}"}]] if web_url else None
+    buttons = (
+        [[{"text": f"🛒 Complete Payment · {_money(order.amount_total, order.currency)}",
+           "url": f"{web_url}/?order={order.id}"}]]
+        if web_url else None
+    )
     return text, buttons
+
+
+def orders_summary(link: TelegramLink) -> tuple[str, list | None]:
+    if not link.is_linked:
+        return ("Your orders live with your account.\n\n" + LOGIN_PROMPT, None)
+
+    orders = checkout_service.list_orders(link.buyer_id())[:5]
+    if not orders:
+        return ("You don't have any orders yet.", None)
+
+    blocks = []
+    for o in orders:
+        payment = o.latest_payment()
+        status = payment.status.value if payment and payment.status else "PENDING"
+        icon = {"PAID": "✅", "FAILED": "❌", "CANCELLED": "⚠️"}.get(status, "⏳")
+        items = ", ".join(
+            f"{i.get('quantity')} × {i.get('product_name')}" for i in (o.items or [])
+        )
+        blocks.append(
+            f"{icon} <b>{_money(o.amount_total, o.currency)}</b> — {markdown_to_telegram_html(items)}\n"
+            f"    Payment: {status} · Order: {o.status.value if o.status else '—'}\n"
+            f"    <code>{str(o.id)[:8]}</code>"
+        )
+    return ("<b>Your recent orders</b>\n\n" + "\n\n".join(blocks), None)
 
 
 def looks_like_checkout(text: str) -> bool:
     lowered = (text or "").lower().strip()
     return any(
         kw in lowered
-        for kw in ("checkout", "check out", "i want to pay", "pay now", "complete payment", "buy now")
+        for kw in ("checkout", "check out", "i want to pay", "pay now", "complete payment",
+                   "place order", "buy it", "purchase it")
     )
 
 
@@ -362,15 +586,13 @@ def looks_like_checkout(text: str) -> bool:
 
 def process_update(app, update: dict):
     """Runs on a background thread so the webhook can answer Telegram
-    immediately — otherwise Telegram times out and redelivers the update,
-    and the buyer gets duplicate replies."""
+    immediately — a slow 200 makes Telegram retry and duplicate replies."""
     with app.app_context():
         try:
             _dispatch(update)
-        except Exception as exc:  # noqa: BLE001 — never let a thread die silently
+        except Exception as exc:  # noqa: BLE001 — never let the thread die silently
             audit_service.log_event(
-                action="TELEGRAM_UPDATE_FAILED",
-                metadata={"error": str(exc)[:400]},
+                action="TELEGRAM_UPDATE_FAILED", metadata={"error": str(exc)[:400]}
             )
 
 
@@ -401,13 +623,21 @@ def _dispatch(update: dict):
     if text.startswith("/login"):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_message(chat_id, "Please include your email: `/login you@example.com`")
+            send_message(chat_id, "Please include your email: <code>/login you@example.com</code>")
             return
         _, msg = login(link, parts[1])
         send_message(chat_id, msg)
         return
     if text.startswith("/logout"):
         send_message(chat_id, logout(link))
+        return
+    if text.startswith("/cart"):
+        msg, buttons = cart_summary(link)
+        send_message(chat_id, msg, buttons)
+        return
+    if text.startswith("/orders"):
+        msg, buttons = orders_summary(link)
+        send_message(chat_id, msg, buttons)
         return
     if text.startswith("/"):
         send_message(chat_id, "I don't know that command. Try /help")
@@ -432,12 +662,61 @@ def _handle_callback(callback: dict):
         return
 
     link = get_or_create_link(tg_user, chat_id)
-    answer_callback(callback["id"])
 
     if data.startswith("sel:"):
+        answer_callback(callback["id"], "Adding to cart…")
         try:
-            _, product_id, variant_id = data.split(":", 2)
-        except ValueError:
-            send_message(chat_id, "That selection is no longer valid.")
+            _, ci, vi = data.split(":", 2)
+            msg, buttons = handle_selection(link, int(ci), int(vi))
+        except (ValueError, TypeError):
+            msg, buttons = "That selection is no longer valid.", None
+        send_message(chat_id, msg, buttons)
+        return
+
+    if data.startswith("pic:"):
+        answer_callback(callback["id"])
+        try:
+            idx = int(data.split(":", 1)[1])
+            card = (link.last_cards or [])[idx]
+        except (ValueError, IndexError):
+            send_message(chat_id, "Those photos are no longer available.")
             return
-        send_message(chat_id, handle_selection(link, product_id, variant_id))
+        images = card.get("images") or ([card["image_url"]] if card.get("image_url") else [])
+        if len(images) > 1:
+            send_gallery(chat_id, images, f"<b>{markdown_to_telegram_html(card.get('name') or '')}</b>")
+        elif images:
+            send_photo(chat_id, images[0], f"<b>{markdown_to_telegram_html(card.get('name') or '')}</b>")
+        else:
+            send_message(chat_id, "No photos available for that product.")
+        return
+
+    if data.startswith("sug:"):
+        answer_callback(callback["id"])
+        try:
+            idx = int(data.split(":", 1)[1])
+            suggestion = (link.last_suggestions or [])[idx]
+        except (ValueError, IndexError):
+            send_message(chat_id, "That suggestion expired — just tell me what you need.")
+            return
+        # Echo it so the conversation reads naturally, then answer it.
+        send_message(chat_id, f"<i>{markdown_to_telegram_html(suggestion)}</i>")
+        if looks_like_checkout(suggestion):
+            msg, buttons = create_checkout_link(link)
+            send_message(chat_id, msg, buttons, preview=True)
+        else:
+            handle_agent_message(link, suggestion)
+        return
+
+    if data == "cart":
+        answer_callback(callback["id"])
+        msg, buttons = cart_summary(link)
+        send_message(chat_id, msg, buttons)
+        return
+
+    if data == "co":
+        answer_callback(callback["id"], "Preparing checkout…")
+        msg, buttons = create_checkout_link(link)
+        send_message(chat_id, msg, buttons, preview=True)
+        return
+
+    answer_callback(callback["id"])
