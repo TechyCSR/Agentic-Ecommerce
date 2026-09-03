@@ -1,14 +1,23 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { Loader2, Menu, MessageSquarePlus } from "lucide-react";
+import { Check, Loader2, Menu, MessageSquarePlus, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { useDeleteSession, useRenameSession } from "@/lib/queries/use-chat";
 import type { ChatSession } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, groupByRecency } from "@/lib/utils";
 
 interface SessionListProps {
   sessions: ChatSession[];
@@ -19,6 +28,112 @@ interface SessionListProps {
   isCreating: boolean;
 }
 
+function SessionRow({
+  session,
+  isActive,
+  onSelect,
+}: {
+  session: ChatSession;
+  isActive: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(session.title || "");
+  const renameSession = useRenameSession();
+  const deleteSession = useDeleteSession();
+
+  function commitRename() {
+    const trimmed = title.trim();
+    setEditing(false);
+    if (!trimmed || trimmed === session.title) return;
+    renameSession.mutate(
+      { sessionId: session.id, title: trimmed },
+      { onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to rename chat") }
+    );
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1 px-1">
+        <Input
+          autoFocus
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitRename();
+            if (e.key === "Escape") {
+              setTitle(session.title || "");
+              setEditing(false);
+            }
+          }}
+          className="h-8 text-sm"
+        />
+        <Button variant="ghost" size="icon-sm" onClick={commitRename}>
+          <Check className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => {
+            setTitle(session.title || "");
+            setEditing(false);
+          }}
+        >
+          <X className="size-3.5" />
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "group flex items-center rounded-md pr-1 transition-colors",
+        isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onSelect(session.id)}
+        className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm"
+      >
+        {session.title || "New chat"}
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn(
+                "size-6 shrink-0 opacity-0 group-hover:opacity-100 data-popup-open:opacity-100",
+                isActive && "text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
+              )}
+            />
+          }
+        >
+          <MoreHorizontal className="size-3.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => setEditing(true)}>
+            <Pencil className="size-3.5" /> Rename
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={() =>
+              deleteSession.mutate(session.id, {
+                onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to delete chat"),
+              })
+            }
+          >
+            <Trash2 className="size-3.5" /> Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
 function SessionListContent({
   sessions,
   activeId,
@@ -27,6 +142,8 @@ function SessionListContent({
   isLoading,
   isCreating,
 }: SessionListProps) {
+  const groups = groupByRecency(sessions, (s) => s.updated_at);
+
   return (
     <>
       <div className="flex h-16 items-center border-b px-4">
@@ -42,26 +159,19 @@ function SessionListContent({
           New chat
         </Button>
       </div>
-      <nav className="flex-1 space-y-1 overflow-y-auto p-3 pt-0">
+      <nav className="flex-1 space-y-3 overflow-y-auto p-3 pt-0">
         {isLoading ? (
           <Loader2 className="mx-auto mt-4 size-4 animate-spin text-muted-foreground" />
         ) : sessions.length === 0 ? (
           <p className="p-2 text-xs text-muted-foreground">No chats yet — start one above.</p>
         ) : (
-          sessions.map((session) => (
-            <button
-              key={session.id}
-              type="button"
-              onClick={() => onSelect(session.id)}
-              className={cn(
-                "block w-full truncate rounded-md px-3 py-2 text-left text-sm transition-colors",
-                session.id === activeId
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-            >
-              {session.title || "New chat"}
-            </button>
+          groups.map(([label, group]) => (
+            <div key={label} className="space-y-1">
+              <p className="px-3 py-1 text-xs font-medium text-muted-foreground">{label}</p>
+              {group.map((session) => (
+                <SessionRow key={session.id} session={session} isActive={session.id === activeId} onSelect={onSelect} />
+              ))}
+            </div>
           ))
         )}
       </nav>
@@ -81,7 +191,7 @@ export function SessionSidebar(props: SessionListProps) {
   );
 }
 
-export function MobileSessionHeader(props: SessionListProps) {
+export function MobileSessionHeader(props: SessionListProps & { rightSlot?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -108,7 +218,10 @@ export function MobileSessionHeader(props: SessionListProps) {
         </SheetContent>
       </Sheet>
       <Logo markClassName="size-6" textClassName="text-sm font-semibold" />
-      <UserButton />
+      <div className="flex items-center gap-2">
+        {props.rightSlot}
+        <UserButton />
+      </div>
     </header>
   );
 }
