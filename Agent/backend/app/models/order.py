@@ -33,6 +33,10 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, db.Model):
         index=True,
     )
 
+    # Snapshotted at checkout: a later edit to the address book must not
+    # change where an already-placed order was going.
+    shipping_address = db.Column(JSONB, nullable=True)
+
     confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     # Ids of the order(s) this became in the Merchant service. A list because
@@ -62,6 +66,7 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, db.Model):
             "status": self.status.value if self.status else None,
             "payment_status": latest.status.value if latest and latest.status else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "shipping_address": self.shipping_address,
             "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
             "merchant_order_ids": self.merchant_order_ids or [],
             "merchant_synced_at": (

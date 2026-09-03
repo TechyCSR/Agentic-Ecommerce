@@ -26,6 +26,12 @@ class ChatMessage(UUIDPrimaryKeyMixin, db.Model):
     # carry the same no-hallucination guarantee as product_cards.
     suggested_replies = db.Column(JSONB, nullable=True)
 
+    # A priced order this turn prepared. Persisted like product_cards so the
+    # Pay button survives the next message, a reload, or switching sessions —
+    # it was previously held only in transient stream state and vanished as
+    # soon as the buyer typed anything.
+    prepared_checkout = db.Column(JSONB, nullable=True)
+
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow, nullable=False)
 
     session = db.relationship("ChatSession", back_populates="messages")
@@ -38,5 +44,6 @@ class ChatMessage(UUIDPrimaryKeyMixin, db.Model):
             "content": self.content,
             "product_cards": self.product_cards,
             "suggested_replies": self.suggested_replies,
+            "prepared_checkout": self.prepared_checkout,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
