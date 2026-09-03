@@ -1,5 +1,7 @@
 from marshmallow import Schema, fields, validate
 
+from app.models.enums import ENABLED_SCOPES
+
 
 class ApiClientCreateSchema(Schema):
     name = fields.String(required=True, validate=validate.Length(min=1, max=255))
@@ -10,6 +12,6 @@ class ApiClientCreateSchema(Schema):
         ),
     )
     scopes = fields.List(
-        fields.String(validate=validate.OneOf(["catalog:read", "product:read"])),
+        fields.String(validate=validate.OneOf(ENABLED_SCOPES)),
         required=False,
     )

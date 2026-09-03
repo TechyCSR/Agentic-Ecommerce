@@ -53,7 +53,15 @@ class ApiScope(str, enum.Enum):
     CHECKOUT_CREATE = "checkout:create"
 
 
-PHASE1_ENABLED_SCOPES = [ApiScope.CATALOG_READ.value, ApiScope.PRODUCT_READ.value]
+ENABLED_SCOPES = [
+    ApiScope.CATALOG_READ.value,
+    ApiScope.PRODUCT_READ.value,
+    # Lets an authorized agent register a paid order against this catalog.
+    ApiScope.CHECKOUT_CREATE.value,
+]
+
+# Kept as an alias: the original name is referenced elsewhere and in docs.
+PHASE1_ENABLED_SCOPES = ENABLED_SCOPES
 
 
 class OrderStatus(str, enum.Enum):
@@ -64,6 +72,20 @@ class OrderStatus(str, enum.Enum):
     PAID = "PAID"
     PAYMENT_FAILED = "PAYMENT_FAILED"
     CANCELLED = "CANCELLED"
+    # Fulfillment states, set by the merchant after payment.
+    CONFIRMED = "CONFIRMED"
+    PACKED = "PACKED"
+    SHIPPED = "SHIPPED"
+    DELIVERED = "DELIVERED"
+
+
+# The order a merchant can move an order through, after it is PAID.
+FULFILLMENT_FLOW = [
+    OrderStatus.CONFIRMED.value,
+    OrderStatus.PACKED.value,
+    OrderStatus.SHIPPED.value,
+    OrderStatus.DELIVERED.value,
+]
 
 
 class PaymentProvider(str, enum.Enum):
