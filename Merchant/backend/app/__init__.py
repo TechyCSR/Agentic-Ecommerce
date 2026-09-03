@@ -56,12 +56,14 @@ def register_blueprints(app):
     from app.routes.categories import bp as categories_bp
     from app.routes.health import bp as health_bp
     from app.routes.merchants import bp as merchants_bp
+    from app.routes.orders import bp as orders_bp
     from app.routes.products import bp as products_bp
     from app.routes.stores import bp as stores_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(merchants_bp)
+    app.register_blueprint(orders_bp)
     app.register_blueprint(stores_bp)
     app.register_blueprint(products_bp)
     app.register_blueprint(categories_bp)

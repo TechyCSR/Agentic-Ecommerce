@@ -352,8 +352,23 @@ def delete_variant(user, variant_id):
     db.session.commit()
 
 
-def adjust_stock(user, variant_id, quantity_change, reason="MANUAL_ADJUSTMENT"):
-    variant = get_variant_for_user(user, variant_id)
+def adjust_stock_internal(
+    variant,
+    quantity_change,
+    reason="MANUAL_ADJUSTMENT",
+    reference_type=None,
+    reference_id=None,
+    commit=True,
+):
+    """Applies a stock delta to an already-resolved variant.
+
+    Split out from `adjust_stock` because that one resolves the variant
+    through `get_variant_for_user`, which requires a merchant Clerk user —
+    unavailable on the agent API-key path, where an incoming paid order must
+    still decrement inventory. `reference_type`/`reference_id` let the
+    movement point back at the order that caused it (the columns existed but
+    had never been populated).
+    """
     new_quantity = variant.stock_quantity + quantity_change
     if new_quantity < 0:
         raise ValidationError("Stock quantity cannot go below zero")
@@ -363,10 +378,18 @@ def adjust_stock(user, variant_id, quantity_change, reason="MANUAL_ADJUSTMENT"):
         product_variant_id=variant.id,
         quantity_change=quantity_change,
         reason=reason,
+        reference_type=reference_type,
+        reference_id=reference_id,
     )
     db.session.add(movement)
-    db.session.commit()
+    if commit:
+        db.session.commit()
     return variant
+
+
+def adjust_stock(user, variant_id, quantity_change, reason="MANUAL_ADJUSTMENT"):
+    variant = get_variant_for_user(user, variant_id)
+    return adjust_stock_internal(variant, quantity_change, reason)
 
 
 # ---- Images ----
