@@ -741,7 +741,7 @@ def _build_suggestions(
     return ["Search something else"]
 
 
-def _persist_assistant_reply(session, text: str, cards: list[dict], suggestions: list[str] | None, prepared_checkout=None):
+def _persist_assistant_reply(session, text: str, cards: list[dict], suggestions: list[str] | None, prepared_checkout=None, tool_activity=None):
     message = ChatMessage(
         session_id=session.id,
         role=MessageRole.ASSISTANT,
@@ -749,6 +749,7 @@ def _persist_assistant_reply(session, text: str, cards: list[dict], suggestions:
         product_cards=cards or None,
         suggested_replies=suggestions or None,
         prepared_checkout=prepared_checkout,
+        tool_activity=tool_activity or None,
     )
     db.session.add(message)
     if not session.title:
@@ -1250,6 +1251,7 @@ def _consume_stream_round(client, model, messages, state: dict):
                         entry["arguments"] += tc.function.arguments
                 if tc.index not in started and entry["name"]:
                     started.add(tc.index)
+                    state.setdefault("started_tools", []).append(entry["name"])
                     state["emitted_any"] = True
                     yield {"type": "tool_start", "tool": entry["name"], "label": TOOL_LABELS.get(entry["name"], "Working")}
 
@@ -1259,6 +1261,46 @@ def _consume_stream_round(client, model, messages, state: dict):
     # True when this round's text reached the client and was not retracted, so
     # the caller knows not to send it a second time.
     state["streamed_text"] = emitted_text
+
+
+def _record_activity(activity_log: list, tool: str, args: dict, result: dict):
+    """Fills in the newest running entry for this tool with what it returned,
+    so a reopened message shows the same trace the buyer watched live."""
+    entry = next(
+        (e for e in reversed(activity_log) if e["tool"] == tool and e["status"] == "running"),
+        None,
+    )
+    if entry is None:
+        entry = {"tool": tool, "label": TOOL_LABELS.get(tool, "Working")}
+        activity_log.append(entry)
+
+    failed = bool(result.get("error"))
+    entry["status"] = "error" if failed else "done"
+    entry["args"] = {k: v for k, v in (args or {}).items() if v is not None} or None
+
+    if failed:
+        entry["detail"] = str(result.get("error"))[:120]
+    elif tool == "search_catalog":
+        count = len(result.get("results") or [])
+        entry["result_count"] = count
+        entry["detail"] = f"Found {count} product{'' if count == 1 else 's'}"
+    elif tool == "get_product_details":
+        entry["detail"] = result.get("name")
+    elif tool == "add_to_cart":
+        entry["detail"] = f"{result.get('quantity')} × {result.get('product_name')}"
+    elif tool == "view_cart":
+        entry["detail"] = f"{len(result.get('items') or [])} item(s)"
+    elif tool == "prepare_checkout":
+        total = (result.get("total") or {}).get("amount")
+        entry["detail"] = f"Order for ₹{total / 100:,.0f}" if total else "Order prepared"
+    elif tool == "get_order_status":
+        entry["detail"] = f"{len(result.get('orders') or [])} order(s)"
+    elif tool == "list_categories":
+        entry["detail"] = f"{len(result.get('categories') or [])} categories"
+    elif tool in ("add_address", "set_delivery_address"):
+        entry["detail"] = result.get("delivery_address")
+    elif tool == "cancel_order":
+        entry["detail"] = result.get("message")
 
 
 def _stream_text(text: str, chunk_size: int = 14):
@@ -1273,11 +1315,13 @@ def _emit_final(
     suggestions: list[str],
     already_streamed: bool = False,
     checkout_ready: list | None = None,
+    activity_log: list | None = None,
 ):
     checkout_ready = checkout_ready or []
     message = _persist_assistant_reply(
         session, text, list(collected_cards.values()), suggestions,
         prepared_checkout=checkout_ready[-1] if checkout_ready else None,
+        tool_activity=activity_log,
     )
     if not already_streamed:
         # Only the fallback paths land here — their text was never streamed
@@ -1329,6 +1373,7 @@ def stream_agent_turn(session, user_message_text: str):
     model = current_app.config["LLM_MODEL"]
     collected_cards: dict[str, dict] = {}
     checkout_ready: list = []
+    activity_log: list = []
     had_search = had_zero_results = had_details = False
 
     # A real state, not a decorative one: the turn genuinely is waiting on
@@ -1392,8 +1437,15 @@ def stream_agent_turn(session, user_message_text: str):
                 suggestions,
                 already_streamed=round_state.get("streamed_text", False),
                 checkout_ready=checkout_ready,
+                activity_log=activity_log,
             )
             return
+
+        for tool_name in round_state.get("started_tools", []):
+            activity_log.append(
+                {"tool": tool_name, "label": TOOL_LABELS.get(tool_name, "Working"),
+                 "status": "running"}
+            )
 
         ordered_calls = [tool_calls[i] for i in sorted(tool_calls)]
         messages.append(
@@ -1423,6 +1475,7 @@ def stream_agent_turn(session, user_message_text: str):
                     session, buyer_id, tc["name"], args, last_shown_cards,
                     collected_cards, checkout_ready,
                 )
+                _record_activity(activity_log, tc["name"], args, result_payload)
                 if tc["name"] == "search_catalog":
                     had_search = True
                     results = result_payload.get("results") or []
@@ -1464,6 +1517,7 @@ def stream_agent_turn(session, user_message_text: str):
                 else:
                     yield {"type": "tool_end", "tool": tc["name"], "args": args}
             except catalog_client.CatalogError as exc:
+                _record_activity(activity_log, tc["name"], args, {"error": str(exc)})
                 tool_failed = True
                 audit_service.log_event(
                     action="TOOL_FAILURE",

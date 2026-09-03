@@ -32,6 +32,11 @@ class ChatMessage(UUIDPrimaryKeyMixin, db.Model):
     # soon as the buyer typed anything.
     prepared_checkout = db.Column(JSONB, nullable=True)
 
+    # What the agent actually did this turn (tools, arguments, results).
+    # Persisted so the buyer can reopen the trace on an old message, not just
+    # watch it stream past once.
+    tool_activity = db.Column(JSONB, nullable=True)
+
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow, nullable=False)
 
     session = db.relationship("ChatSession", back_populates="messages")
@@ -45,5 +50,6 @@ class ChatMessage(UUIDPrimaryKeyMixin, db.Model):
             "product_cards": self.product_cards,
             "suggested_replies": self.suggested_replies,
             "prepared_checkout": self.prepared_checkout,
+            "tool_activity": self.tool_activity,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
