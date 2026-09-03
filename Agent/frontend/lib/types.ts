@@ -41,6 +41,8 @@ export interface ProductCard {
   category: string | null;
   description: string | null;
   image_url: string | null;
+  /** Primary first, then the rest — served with the product, never fetched separately. */
+  images?: string[];
   merchant_name: string | null;
   store_name: string | null;
   price: Money | null;
@@ -93,11 +95,33 @@ export interface Cart {
 }
 
 // SSE event shapes streamed from POST /sessions/:id/messages
+export type ToolArgs = Record<string, string | number | boolean | null>;
+
 export type StreamEvent =
+  | { type: "thinking" }
   | { type: "tool_start"; tool: string; label?: string }
-  | { type: "tool_end"; tool: string; result_count?: number; error?: boolean }
+  | {
+      type: "tool_end";
+      tool: string;
+      result_count?: number;
+      error?: boolean;
+      args?: ToolArgs;
+      product_name?: string;
+    }
   | { type: "token"; delta: string }
   | { type: "product_cards"; cards: ProductCard[] }
   | { type: "suggestions"; items: string[] }
   | { type: "done"; message_id: string }
   | { type: "error"; message: string };
+
+/** One line in the agent activity timeline, derived only from real stream events. */
+export interface ActivityStep {
+  id: string;
+  kind: "thinking" | "tool";
+  tool?: string;
+  label: string;
+  detail?: string;
+  args?: ToolArgs;
+  resultCount?: number;
+  status: "running" | "done" | "error";
+}

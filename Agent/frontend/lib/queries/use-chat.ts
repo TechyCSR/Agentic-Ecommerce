@@ -8,6 +8,7 @@ import { API_URL, ApiRequestError } from "@/lib/api";
 import { parseSSEStream } from "@/lib/sse";
 import { useApi } from "@/lib/use-api";
 import type {
+  ActivityStep,
   Cart,
   CartItem,
   ChatSession,
@@ -72,36 +73,46 @@ export function useDeleteSession() {
   });
 }
 
-export interface ToolStatus {
-  tool: string;
-  label: string;
-  phase: "running" | "done";
-}
-
 export interface StreamState {
   isStreaming: boolean;
   sessionId: string | null;
-  status: ToolStatus | null;
+  /** Optimistic echo of what the buyer just sent, shown before the server round-trip. */
+  pendingUserText: string | null;
+  activity: ActivityStep[];
   streamedText: string;
   cards: ProductCard[];
   suggestions: string[];
   error: string | null;
+  /** The message that failed, so the UI can offer a one-click retry. */
+  failedText: string | null;
 }
 
 const IDLE_STREAM_STATE: StreamState = {
   isStreaming: false,
   sessionId: null,
-  status: null,
+  pendingUserText: null,
+  activity: [],
   streamedText: "",
   cards: [],
   suggestions: [],
   error: null,
+  failedText: null,
 };
 
 const TOOL_LABELS: Record<string, string> = {
-  search_catalog: "Searching the catalog…",
-  get_product_details: "Checking product details…",
+  search_catalog: "Searching product catalog",
+  get_product_details: "Retrieving product details",
 };
+
+const TOOL_DONE_LABELS: Record<string, string> = {
+  search_catalog: "Searched product catalog",
+  get_product_details: "Retrieved product details",
+};
+
+/** Marks every still-running step as finished — the agent has moved on. */
+function settleActivity(activity: ActivityStep[]): ActivityStep[] {
+  return activity.map((step) => (step.status === "running" ? { ...step, status: "done" } : step));
+}
 
 /**
  * Drives one streamed turn over SSE. Not a react-query mutation — the UI
@@ -120,7 +131,9 @@ export function useStreamChat() {
     async (sessionId: string, text: string): Promise<boolean> => {
       const controller = new AbortController();
       abortRef.current = controller;
-      setState({ ...IDLE_STREAM_STATE, isStreaming: true, sessionId });
+      // The buyer's own message renders immediately from this, so the chat
+      // reacts on the very next frame instead of after the round-trip.
+      setState({ ...IDLE_STREAM_STATE, isStreaming: true, sessionId, pendingUserText: text });
 
       try {
         const token = await getToken();
@@ -150,19 +163,64 @@ export function useStreamChat() {
           (event) => {
             setState((prev) => {
               switch (event.type) {
+                case "thinking":
+                  return {
+                    ...prev,
+                    activity: [
+                      ...prev.activity,
+                      {
+                        id: `thinking-${prev.activity.length}`,
+                        kind: "thinking",
+                        label: "Understanding your request",
+                        status: "running",
+                      },
+                    ],
+                  };
                 case "tool_start":
                   return {
                     ...prev,
-                    status: {
-                      tool: event.tool,
-                      label: event.label || TOOL_LABELS[event.tool] || "Working…",
-                      phase: "running",
-                    },
+                    activity: [
+                      ...settleActivity(prev.activity),
+                      {
+                        id: `${event.tool}-${prev.activity.length}`,
+                        kind: "tool",
+                        tool: event.tool,
+                        label: event.label || TOOL_LABELS[event.tool] || "Working",
+                        status: "running",
+                      },
+                    ],
                   };
-                case "tool_end":
-                  return { ...prev, status: prev.status ? { ...prev.status, phase: "done" } : null };
+                case "tool_end": {
+                  const activity = [...prev.activity];
+                  // Attach the result to the matching running step rather
+                  // than assuming it's the last one — a round can start
+                  // several tool calls before any of them finish.
+                  const idx = activity.findLastIndex(
+                    (s) => s.tool === event.tool && s.status === "running"
+                  );
+                  if (idx !== -1) {
+                    const count = event.result_count;
+                    activity[idx] = {
+                      ...activity[idx],
+                      status: event.error ? "error" : "done",
+                      label: TOOL_DONE_LABELS[event.tool] || activity[idx].label,
+                      args: event.args,
+                      resultCount: count,
+                      detail: event.error
+                        ? "Catalog unavailable"
+                        : event.tool === "search_catalog"
+                          ? `Found ${count ?? 0} product${count === 1 ? "" : "s"}`
+                          : event.product_name || undefined,
+                    };
+                  }
+                  return { ...prev, activity };
+                }
                 case "token":
-                  return { ...prev, status: null, streamedText: prev.streamedText + event.delta };
+                  return {
+                    ...prev,
+                    activity: settleActivity(prev.activity),
+                    streamedText: prev.streamedText + event.delta,
+                  };
                 case "product_cards":
                   return { ...prev, cards: event.cards };
                 case "suggestions":
@@ -173,10 +231,16 @@ export function useStreamChat() {
                   // has actually refetched below — otherwise there's a gap
                   // where neither the live bubble nor the persisted
                   // message is on screen.
-                  return { ...prev, status: null };
+                  return { ...prev, activity: settleActivity(prev.activity) };
                 case "error":
                   sawError = event.message;
-                  return { ...prev, isStreaming: false, status: null, error: event.message };
+                  return {
+                    ...prev,
+                    isStreaming: false,
+                    activity: settleActivity(prev.activity),
+                    error: event.message,
+                    failedText: text,
+                  };
                 default:
                   return prev;
               }
@@ -191,15 +255,24 @@ export function useStreamChat() {
         await queryClient.invalidateQueries({ queryKey: ["chat-session", sessionId] });
         queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
 
-        setState((prev) => ({ ...prev, isStreaming: false }));
+        // pendingUserText clears only here: the refetched session now
+        // contains the real persisted user message, so dropping the
+        // optimistic echo can't leave a gap where neither is shown.
+        setState((prev) => ({ ...prev, isStreaming: false, pendingUserText: null }));
         return !sawError;
       } catch (err) {
         if (controller.signal.aborted) {
-          setState((prev) => ({ ...prev, isStreaming: false }));
+          setState((prev) => ({ ...prev, isStreaming: false, pendingUserText: null }));
           return false;
         }
         const message = err instanceof Error ? err.message : "Failed to send message";
-        setState((prev) => ({ ...prev, isStreaming: false, error: message }));
+        setState((prev) => ({
+          ...prev,
+          isStreaming: false,
+          activity: settleActivity(prev.activity),
+          error: message,
+          failedText: text,
+        }));
         return false;
       }
     },
