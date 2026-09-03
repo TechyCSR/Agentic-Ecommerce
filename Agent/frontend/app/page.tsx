@@ -1,15 +1,19 @@
 "use client";
 
-import { MessageSquarePlus, Sparkles } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { AgentHeader } from "@/components/chat/agent-header";
 import { CartDrawer } from "@/components/chat/cart-drawer";
 import { ChatInput } from "@/components/chat/chat-input";
-import { LiveAssistantBubble, MessageBubble } from "@/components/chat/message-bubble";
+import { EmptyState } from "@/components/chat/empty-state";
+import {
+  ErrorBubble,
+  LiveAssistantBubble,
+  MessageBubble,
+  UserMessage,
+} from "@/components/chat/message-bubble";
 import { MobileSessionHeader, SessionSidebar } from "@/components/chat/session-sidebar";
-import { SuggestionChips } from "@/components/chat/suggestion-chips";
-import { Button } from "@/components/ui/button";
 import {
   useAddToCart,
   useCart,
@@ -18,12 +22,6 @@ import {
   useSessions,
   useStreamChat,
 } from "@/lib/queries/use-chat";
-
-const STARTER_SUGGESTIONS = [
-  "Show me trending products",
-  "I need a mechanical keyboard under ₹5,000",
-  "Search by category",
-];
 
 export default function ChatPage() {
   const { data: sessions, isLoading: sessionsLoading } = useSessions();
@@ -38,7 +36,7 @@ export default function ChatPage() {
     setActiveId(sessions[0].id);
   }
 
-  const { data: session, isLoading: sessionLoading } = useSession(activeId ?? undefined);
+  const { data: session } = useSession(activeId ?? undefined);
   const { data: cart } = useCart(activeId ?? undefined);
   const { state: stream, send, stop } = useStreamChat();
   const addToCart = useAddToCart();
@@ -48,7 +46,13 @@ export default function ChatPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [session?.messages, stream.streamedText, stream.status]);
+  }, [session?.messages, stream.streamedText, stream.activity, stream.pendingUserText]);
+
+  // Cards already in the cart get an "Added" state instead of a second lookup.
+  const selectedProductIds = useMemo(
+    () => new Set((cart?.items ?? []).map((i) => i.product_id)),
+    [cart]
+  );
 
   async function handleNewSession() {
     try {
@@ -75,9 +79,7 @@ export default function ChatPage() {
         return false;
       }
     }
-    const ok = await send(sessionId, text);
-    if (!ok && stream.error) toast.error(stream.error);
-    return ok;
+    return send(sessionId, text);
   }
 
   async function handleBuyNow(productId: string, variantId: string) {
@@ -85,7 +87,7 @@ export default function ChatPage() {
     setAddingProductId(productId);
     try {
       await addToCart.mutateAsync({ sessionId: activeId, productId, variantId });
-      toast.success("Added to cart");
+      toast.success("Product selected — ready for checkout");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to add this product");
     } finally {
@@ -102,84 +104,78 @@ export default function ChatPage() {
     isCreating: createSession.isPending,
   };
 
-  const lastMessage = session?.messages[session.messages.length - 1];
+  const messages = session?.messages ?? [];
+  const lastMessage = messages[messages.length - 1];
   const showPersistedSuggestions =
-    !stream.isStreaming && lastMessage?.role === "assistant" && (lastMessage.suggested_replies?.length ?? 0) > 0;
+    !stream.isStreaming &&
+    lastMessage?.role === "assistant" &&
+    (lastMessage.suggested_replies?.length ?? 0) > 0;
+
+  const cartSlot = activeId ? <CartDrawer sessionId={activeId} cart={cart} /> : null;
+  const isThisSession = stream.sessionId === activeId;
+  const showEmptyState = !activeId || (messages.length === 0 && !stream.isStreaming && !stream.error);
 
   return (
-    <div className="flex h-screen w-full overflow-hidden">
+    <div className="flex h-dvh w-full overflow-hidden">
       <SessionSidebar {...sidebarProps} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <MobileSessionHeader {...sidebarProps} rightSlot={activeId ? <CartDrawer sessionId={activeId} cart={cart} /> : null} />
-
-        <div className="hidden items-center justify-end border-b px-6 py-2 md:flex">
-          {activeId && <CartDrawer sessionId={activeId} cart={cart} />}
+        <MobileSessionHeader {...sidebarProps} rightSlot={cartSlot} />
+        <div className="hidden md:block">
+          <AgentHeader isWorking={stream.isStreaming} rightSlot={cartSlot} />
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-6">
-          {!activeId ? (
-            <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-              <Sparkles className="size-10 text-primary" />
-              <div>
-                <h1 className="text-xl font-semibold tracking-tight">
-                  What are you shopping for?
-                </h1>
-                <p className="mt-1 text-muted-foreground">
-                  Describe what you need — I&apos;ll search the real catalog for you.
-                </p>
-              </div>
-              <SuggestionChips suggestions={STARTER_SUGGESTIONS} onPick={handleSend} />
-              <Button variant="outline" onClick={handleNewSession} disabled={createSession.isPending}>
-                <MessageSquarePlus className="size-4" />
-                Start a blank chat
-              </Button>
-            </div>
-          ) : sessionLoading && !session ? (
-            <div className="flex h-full items-center justify-center">
-              <Sparkles className="size-6 animate-pulse text-muted-foreground" />
-            </div>
+        <div className="flex-1 overflow-y-auto">
+          {showEmptyState ? (
+            <EmptyState onPick={handleSend} />
           ) : (
-            <div className="mx-auto max-w-3xl space-y-6">
-              {(session?.messages ?? []).length === 0 && !stream.isStreaming && (
-                <p className="text-center text-sm text-muted-foreground">
-                  Try: &quot;I need a mechanical keyboard under ₹5,000&quot;
-                </p>
-              )}
-              {session?.messages.map((message) => (
+            <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-6">
+              {messages.map((message) => (
                 <MessageBubble
                   key={message.id}
                   message={message}
                   onBuyNow={handleBuyNow}
                   addingProductId={addingProductId}
-                  onSuggestion={message.id === lastMessage?.id && showPersistedSuggestions ? handleSend : undefined}
+                  selectedProductIds={selectedProductIds}
+                  onSuggestion={
+                    message.id === lastMessage?.id && showPersistedSuggestions ? handleSend : undefined
+                  }
                   suggestionsDisabled={stream.isStreaming}
                 />
               ))}
-              {stream.isStreaming && stream.sessionId === activeId && (
+
+              {/* Optimistic echo — only while the server hasn't persisted it yet. */}
+              {isThisSession && stream.pendingUserText && (
+                <UserMessage content={stream.pendingUserText} />
+              )}
+
+              {isThisSession && stream.isStreaming && (
                 <LiveAssistantBubble
-                  status={stream.status}
+                  activity={stream.activity}
                   text={stream.streamedText}
                   cards={stream.cards}
                   suggestions={stream.suggestions}
                   onSuggestion={handleSend}
                   onBuyNow={handleBuyNow}
                   addingProductId={addingProductId}
+                  selectedProductIds={selectedProductIds}
                 />
               )}
+
+              {isThisSession && !stream.isStreaming && stream.error && (
+                <ErrorBubble
+                  message={stream.error}
+                  isRetrying={stream.isStreaming}
+                  onRetry={() => stream.failedText && handleSend(stream.failedText)}
+                />
+              )}
+
               <div ref={bottomRef} />
             </div>
           )}
         </div>
 
-        <div className="w-full">
-          <ChatInput
-            onSend={handleSend}
-            disabled={stream.isStreaming}
-            isStreaming={stream.isStreaming}
-            onStop={stop}
-          />
-        </div>
+        <ChatInput onSend={handleSend} isStreaming={stream.isStreaming} onStop={stop} />
       </div>
     </div>
   );
