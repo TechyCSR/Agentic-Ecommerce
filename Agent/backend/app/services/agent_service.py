@@ -378,6 +378,7 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             session_id=session.id,
             buyer_clerk_user_id=buyer_id,
             metadata={"params": args, "result_count": len(data)},
+            commit=False,
         )
         if not data:
             audit_service.log_event(
@@ -385,6 +386,7 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                 session_id=session.id,
                 buyer_clerk_user_id=buyer_id,
                 metadata={"params": args},
+                commit=False,
             )
         for product in data:
             collected_cards[product["product_id"]] = _to_card(product)
@@ -412,6 +414,7 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                 "product_index": product_index,
                 "found": product is not None,
             },
+            commit=False,
         )
         if product is None:
             return {"error": "Product not found or not available."}
@@ -439,6 +442,7 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             session_id=session.id,
             buyer_clerk_user_id=buyer_id,
             metadata={"order_id": order_id, "result_count": len(orders)},
+            commit=False,
         )
 
         if not orders:
@@ -527,6 +531,10 @@ def _consume_stream_round(client, model, messages, state: dict):
     tool_calls: dict[int, dict] = {}
     finish_reason = None
     started: set[int] = set()
+    emitted_text = False
+    # Kept current as we go (not just at the end) so the caller can still tell
+    # what reached the client if this round raises part-way through.
+    state["streamed_text"] = False
 
     q: queue.Queue = queue.Queue()
     threading.Thread(target=_produce_stream, args=(client, model, messages, q), daemon=True).start()
@@ -551,7 +559,20 @@ def _consume_stream_round(client, model, messages, state: dict):
             finish_reason = choice.finish_reason
         if delta and delta.content:
             content_parts.append(delta.content)
+            # Sent the instant it arrives — this is what makes the reply feel
+            # immediate. If it turns out to have been pre-tool narration, the
+            # retract below takes it back before it can stand as an answer.
+            yield {"type": "token", "delta": delta.content}
+            emitted_text = True
+            state["streamed_text"] = True
         if delta and delta.tool_calls:
+            if emitted_text:
+                # This round is calling a tool after all, so everything streamed
+                # so far was narration written before any grounded result
+                # existed. Tell the client to drop it.
+                yield {"type": "retract"}
+                emitted_text = False
+                state["streamed_text"] = False
             for tc in delta.tool_calls:
                 entry = tool_calls.setdefault(tc.index, {"id": None, "name": None, "arguments": ""})
                 if tc.id:
@@ -568,6 +589,9 @@ def _consume_stream_round(client, model, messages, state: dict):
     state["finish_reason"] = finish_reason
     state["content"] = "".join(content_parts)
     state["tool_calls"] = tool_calls
+    # True when this round's text reached the client and was not retracted, so
+    # the caller knows not to send it a second time.
+    state["streamed_text"] = emitted_text
 
 
 def _stream_text(text: str, chunk_size: int = 14):
@@ -575,9 +599,18 @@ def _stream_text(text: str, chunk_size: int = 14):
         yield {"type": "token", "delta": text[i : i + chunk_size]}
 
 
-def _emit_final(session, text: str, collected_cards: dict, suggestions: list[str]):
+def _emit_final(
+    session,
+    text: str,
+    collected_cards: dict,
+    suggestions: list[str],
+    already_streamed: bool = False,
+):
     message = _persist_assistant_reply(session, text, list(collected_cards.values()), suggestions)
-    yield from _stream_text(text)
+    if not already_streamed:
+        # Only the fallback paths land here — their text was never streamed
+        # live, so it still needs sending.
+        yield from _stream_text(text)
     yield {"type": "product_cards", "cards": message.product_cards or []}
     yield {"type": "suggestions", "items": suggestions}
     yield {"type": "done", "message_id": str(message.id)}
@@ -592,6 +625,7 @@ def stream_agent_turn(session, user_message_text: str):
         session_id=session.id,
         buyer_clerk_user_id=buyer_id,
         metadata={"message": user_message_text},
+        commit=False,
     )
     comparison_intent = _detect_comparison_intent(user_message_text)
     if comparison_intent:
@@ -600,6 +634,7 @@ def stream_agent_turn(session, user_message_text: str):
             session_id=session.id,
             buyer_clerk_user_id=buyer_id,
             metadata={"message": user_message_text},
+            commit=False,
         )
 
     db.session.add(
@@ -631,6 +666,10 @@ def stream_agent_turn(session, user_message_text: str):
                 buyer_clerk_user_id=buyer_id,
                 metadata={"error": str(exc)},
             )
+            if round_state.get("streamed_text"):
+                # Clear the half-written reply so the fixed message replaces it
+                # rather than appending to a truncated sentence.
+                yield {"type": "retract"}
             yield from _emit_final(session, FIXED_SEARCH_FAILURE_MESSAGE, collected_cards, [])
             return
 
@@ -646,7 +685,13 @@ def stream_agent_turn(session, user_message_text: str):
                 comparison_intent=comparison_intent,
                 is_first_turn=is_first_turn,
             )
-            yield from _emit_final(session, text, collected_cards, suggestions)
+            yield from _emit_final(
+                session,
+                text,
+                collected_cards,
+                suggestions,
+                already_streamed=round_state.get("streamed_text", False),
+            )
             return
 
         ordered_calls = [tool_calls[i] for i in sorted(tool_calls)]
