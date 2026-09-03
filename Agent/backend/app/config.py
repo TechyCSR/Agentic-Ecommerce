@@ -37,6 +37,14 @@ class Config:
     RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
     RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
 
+    # Upper bound on a single order, in the smallest currency unit (paise).
+    # Razorpay enforces its own per-account/per-method ceiling and rejects
+    # the payment inside Checkout with "Amount exceeds maximum amount
+    # allowed" — which the buyer only discovers after clicking Pay. Setting
+    # this to your account's real limit turns that into a clear message at
+    # checkout instead. 0 disables the app-side check.
+    MAX_ORDER_AMOUNT = int(os.getenv("MAX_ORDER_AMOUNT", "0"))
+
     # CORS
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3100")
 

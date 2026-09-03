@@ -7,11 +7,20 @@ that response, so a stale cart snapshot or a tampered request can't set
 the amount that gets charged.
 """
 
+from flask import current_app
+
 from app.extensions import db
 from app.models import Order, SelectedProduct
 from app.models.enums import OrderStatus, PaymentStatus, SelectionStatus
 from app.services import audit_service, catalog_client, chat_service
 from app.utils.exceptions import ForbiddenError, NotFoundError, ValidationError
+
+
+def _format_amount(paise: int, currency: str = "INR") -> str:
+    """Smallest-unit integer -> a string a buyer reads, e.g. 8999900 -> ₹89,999."""
+    symbol = "₹" if currency == "INR" else f"{currency} "
+    major = paise / 100
+    return f"{symbol}{major:,.0f}" if major == int(major) else f"{symbol}{major:,.2f}"
 
 
 def _validate_line(buyer_id: str, session_id, item: SelectedProduct) -> dict:
@@ -136,6 +145,27 @@ def create_checkout(buyer_id: str, session_id) -> Order:
     amount_total = sum(line["line_total"]["amount"] for line in lines)
     if amount_total <= 0:
         raise ValidationError("This order has no payable amount.", code="INVALID_AMOUNT")
+
+    # Fail here, with a number the buyer can act on, rather than letting
+    # Razorpay reject the payment after they've already clicked Pay.
+    max_amount = current_app.config.get("MAX_ORDER_AMOUNT") or 0
+    if max_amount and amount_total > max_amount:
+        audit_service.log_event(
+            action="CHECKOUT_REJECTED",
+            session_id=session.id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={
+                "reason": "amount_over_limit",
+                "amount": amount_total,
+                "limit": max_amount,
+            },
+        )
+        raise ValidationError(
+            f"This order comes to {_format_amount(amount_total)}, which is above the "
+            f"{_format_amount(max_amount)} payment limit currently supported. "
+            "Please remove an item or reduce the quantity.",
+            code="AMOUNT_OVER_LIMIT",
+        )
 
     order = Order(
         session_id=session.id,
