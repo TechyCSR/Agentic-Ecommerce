@@ -221,6 +221,10 @@ export function useStreamChat() {
                     activity: settleActivity(prev.activity),
                     streamedText: prev.streamedText + event.delta,
                   };
+                case "retract":
+                  // Text streamed before a tool call isn't grounded in any
+                  // result yet, so it never stands as the answer.
+                  return { ...prev, streamedText: "" };
                 case "product_cards":
                   return { ...prev, cards: event.cards };
                 case "suggestions":

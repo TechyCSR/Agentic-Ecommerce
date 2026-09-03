@@ -40,7 +40,10 @@ export function ProductDetailDialog({
       <DialogContent className="max-h-[90vh] gap-0 overflow-y-auto p-0 sm:max-w-lg">
         <DialogTitle className="sr-only">{product.name}</DialogTitle>
 
-        <div className="relative aspect-square w-full sm:aspect-[4/3]">
+        {/* overflow-hidden + rounded top: without it the square image paints
+            over DialogContent's rounded corners and looks like it's escaping
+            the dialog. */}
+        <div className="relative aspect-square w-full overflow-hidden rounded-t-xl sm:aspect-[4/3]">
           <ProductImage
             src={images[activeImage]}
             alt={product.name}

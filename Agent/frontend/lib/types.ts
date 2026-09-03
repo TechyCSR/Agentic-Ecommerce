@@ -181,6 +181,8 @@ export type StreamEvent =
       product_name?: string;
     }
   | { type: "token"; delta: string }
+  /** Discard streamed text so far — it turned out to precede a tool call. */
+  | { type: "retract" }
   | { type: "product_cards"; cards: ProductCard[] }
   | { type: "suggestions"; items: string[] }
   | { type: "done"; message_id: string }
