@@ -64,6 +64,16 @@ TOOL_NOTICES = {
     "get_order_status": "🧾 Finding your latest order…",
 }
 
+# Filler the deterministic builder falls back to when it has nothing useful
+# to add. On the web these sit quietly under a message; in Telegram each one
+# becomes a "What next?" block with a button, so a lone filler is pure noise —
+# and tapping it just produces the same filler again.
+GENERIC_SUGGESTIONS = {
+    "search something else",
+    "show more options",
+    "refine my search",
+}
+
 LOGIN_PROMPT = (
     "You'll need to connect your account for that.\n\n"
     "<code>/login your-email@example.com</code>\n\n"
@@ -138,6 +148,20 @@ def send_gallery(chat_id: int, image_urls: list, caption_html: str):
             item["parse_mode"] = "HTML"
         media.append(item)
     return _api("sendMediaGroup", {"chat_id": chat_id, "media": media})
+
+
+def edit_message(chat_id: int, message_id: int, html_text: str, buttons: list | None = None) -> bool:
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": html_text[:MAX_MESSAGE],
+        "parse_mode": "HTML",
+        "link_preview_options": {"is_disabled": True},
+    }
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    result = _api("editMessageText", payload)
+    return bool(result and result.get("ok"))
 
 
 def answer_callback(callback_id: str, text: str = ""):
@@ -292,6 +316,10 @@ def _money(amount, currency="INR") -> str:
     return f"{symbol}{amount / 100:,.0f}"
 
 
+def _card_title(card: dict) -> str:
+    return f"<b>{markdown_to_telegram_html(card.get('name') or 'Product')}</b>"
+
+
 def _card_caption(card: dict) -> str:
     price = card.get("price") or {}
     parts = [f"<b>{markdown_to_telegram_html(card.get('name') or 'Product')}</b>"]
@@ -332,8 +360,6 @@ def _card_buttons(card_index: int, card: dict) -> list:
                 [{"text": f"🛒 {label} · {_money((v.get('price') or {}).get('amount'))}",
                   "callback_data": f"sel:{card_index}:{vi}"}]
             )
-    if (card.get("images") or []) and len(card["images"]) > 1:
-        buttons.append([{"text": "🖼 More photos", "callback_data": f"pic:{card_index}"}])
     return buttons
 
 
@@ -345,15 +371,32 @@ def _remember(link: TelegramLink, cards=None, suggestions=None):
     db.session.commit()
 
 
+def _card_images(card: dict) -> list:
+    images = [u for u in (card.get("images") or []) if u]
+    if not images and card.get("image_url"):
+        images = [card["image_url"]]
+    return images
+
+
 def _send_products(chat_id: int, cards: list, link: TelegramLink):
     for idx, card in enumerate(cards[:MAX_PRODUCT_CARDS]):
         caption = _card_caption(card)
         buttons = _card_buttons(idx, card)
-        image = card.get("image_url")
-        if image:
-            sent = send_photo(chat_id, image, caption, buttons)
+        images = _card_images(card)
+
+        if len(images) > 1:
+            # Album first — Telegram doesn't allow an inline keyboard on a
+            # media group, so the actions follow in their own message.
+            sent = send_gallery(chat_id, images, _card_title(card))
+            if sent and sent.get("ok"):
+                send_message(chat_id, caption, buttons)
+                continue
+
+        if images:
+            sent = send_photo(chat_id, images[0], caption, buttons)
             if sent and sent.get("ok"):
                 continue
+
         # An unreachable image host must not cost the buyer the product.
         send_message(chat_id, caption, buttons)
 
@@ -365,14 +408,38 @@ def _send_products(chat_id: int, cards: list, link: TelegramLink):
         )
 
 
+def _useful_suggestions(suggestions: list, just_asked: str | None = None) -> list:
+    """Keeps only follow-ups worth a button.
+
+    Drops the generic filler, and drops whatever the buyer just tapped so a
+    suggestion can't loop back on itself. Returns [] when nothing meaningful
+    is left, in which case no prompt block is sent at all.
+    """
+    asked = (just_asked or "").strip().lower()
+    kept = [
+        s for s in (suggestions or [])
+        if s.strip().lower() not in GENERIC_SUGGESTIONS and s.strip().lower() != asked
+    ]
+    # A single leftover option isn't a menu; it's clutter.
+    return kept[:3] if len(kept) >= 2 else []
+
+
 def _suggestion_buttons(suggestions: list) -> list:
-    return [[{"text": s[:40], "callback_data": f"sug:{i}"}] for i, s in enumerate(suggestions[:4])]
+    """Two per row where they're short, so the keyboard stays compact."""
+    rows, row = [], []
+    for i, text in enumerate(suggestions):
+        row.append({"text": text[:32], "callback_data": f"sug:{i}"})
+        if len(row) == 2 or len(text) > 22:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    return rows
 
 
 # ---- Agent bridge ----
 
 
-def handle_agent_message(link: TelegramLink, text: str):
+def handle_agent_message(link: TelegramLink, text: str, just_asked: str | None = None):
     from app.services import chat_service
 
     chat_id = link.telegram_chat_id
@@ -416,13 +483,23 @@ def handle_agent_message(link: TelegramLink, text: str):
     if cards:
         _send_products(chat_id, cards, link)
 
-    follow_ups = list(suggestions)
-    if cards and link.is_linked:
-        follow_ups = follow_ups[:3]
     if not link.is_linked and _looks_account_scoped(text):
         send_message(chat_id, LOGIN_PROMPT)
-    elif follow_ups:
-        send_message(chat_id, "<i>What next?</i>", _suggestion_buttons(follow_ups))
+        return
+
+    follow_ups = _useful_suggestions(suggestions, just_asked or text)
+    if not follow_ups:
+        return
+
+    # Attach the buttons to a line that earns its place, rather than a bare
+    # "What next?" after every single reply.
+    if cards:
+        actions = _suggestion_buttons(follow_ups)
+        if link.is_linked:
+            actions.append([{"text": "🧾 View cart", "callback_data": "cart"}])
+        send_message(chat_id, "<i>Anything else?</i>", actions)
+    else:
+        send_message(chat_id, "<i>Anything else?</i>", _suggestion_buttons(follow_ups))
 
 
 def _looks_account_scoped(text: str) -> bool:
@@ -548,13 +625,20 @@ def create_checkout_link(link: TelegramLink) -> tuple[str, list | None]:
     return text, buttons
 
 
-def orders_summary(link: TelegramLink) -> tuple[str, list | None]:
+ORDERS_PER_PAGE = 3
+
+
+def orders_summary(link: TelegramLink, page: int = 0) -> tuple[str, list | None]:
     if not link.is_linked:
         return ("Your orders live with your account.\n\n" + LOGIN_PROMPT, None)
 
-    orders = checkout_service.list_orders(link.buyer_id())[:5]
-    if not orders:
+    all_orders = checkout_service.list_orders(link.buyer_id())
+    if not all_orders:
         return ("You don't have any orders yet.", None)
+
+    pages = max(1, (len(all_orders) + ORDERS_PER_PAGE - 1) // ORDERS_PER_PAGE)
+    page = max(0, min(page, pages - 1))
+    orders = all_orders[page * ORDERS_PER_PAGE : (page + 1) * ORDERS_PER_PAGE]
 
     blocks = []
     for o in orders:
@@ -569,7 +653,19 @@ def orders_summary(link: TelegramLink) -> tuple[str, list | None]:
             f"    Payment: {status} · Order: {o.status.value if o.status else '—'}\n"
             f"    <code>{str(o.id)[:8]}</code>"
         )
-    return ("<b>Your recent orders</b>\n\n" + "\n\n".join(blocks), None)
+
+    header = "<b>Your orders</b>"
+    if pages > 1:
+        header += f"  <i>(page {page + 1} of {pages})</i>"
+
+    nav = []
+    if page > 0:
+        nav.append({"text": "◀ Previous", "callback_data": f"ord:{page - 1}"})
+    if page < pages - 1:
+        nav.append({"text": "Next ▶", "callback_data": f"ord:{page + 1}"})
+
+    buttons = [nav] if nav else None
+    return (header + "\n\n" + "\n\n".join(blocks), buttons)
 
 
 def looks_like_checkout(text: str) -> bool:
@@ -704,7 +800,21 @@ def _handle_callback(callback: dict):
             msg, buttons = create_checkout_link(link)
             send_message(chat_id, msg, buttons, preview=True)
         else:
-            handle_agent_message(link, suggestion)
+            handle_agent_message(link, suggestion, just_asked=suggestion)
+        return
+
+    if data.startswith("ord:"):
+        answer_callback(callback["id"])
+        try:
+            page = int(data.split(":", 1)[1])
+        except ValueError:
+            page = 0
+        msg, buttons = orders_summary(link, page)
+        message_id = (callback.get("message") or {}).get("message_id")
+        # Editing keeps the order list in one place rather than posting a new
+        # message on every page turn.
+        if message_id and not edit_message(chat_id, message_id, msg, buttons):
+            send_message(chat_id, msg, buttons)
         return
 
     if data == "cart":

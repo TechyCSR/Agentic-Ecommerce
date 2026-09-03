@@ -31,7 +31,10 @@ class TelegramLink(TimestampMixin, UUIDPrimaryKeyMixin, db.Model):
     # The buyer's ongoing conversation, so Telegram has the same memory the
     # web chat does rather than starting fresh each message.
     session_id = db.Column(
-        UUID(as_uuid=True), db.ForeignKey("chat_sessions.id"), nullable=True
+        UUID(as_uuid=True),
+        # SET NULL: a deleted chat session must not be blocked by this link.
+        db.ForeignKey("chat_sessions.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     # The last products and suggestions shown to this user. Telegram caps
