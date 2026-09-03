@@ -89,3 +89,14 @@ def agent_get_order(agent_order_id):
     if not orders:
         raise NotFoundError("Order not found", code="ORDER_NOT_FOUND")
     return success({"orders": [o.to_dict() for o in orders]})
+
+
+@bp.route("/orders/<agent_order_id>/cancel", methods=["POST"])
+@require_scopes(ApiScope.CHECKOUT_CREATE.value)
+def agent_cancel_order(agent_order_id):
+    """Cancels a synced order and restores its stock. Refused once shipped."""
+    payload = request.get_json(silent=True) or {}
+    orders = order_service.cancel_order_from_agent(
+        agent_order_id, payload.get("reason"), g.api_client.id
+    )
+    return success({"cancelled": [o.to_dict(include_items=False) for o in orders]})

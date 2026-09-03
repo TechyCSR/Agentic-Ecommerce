@@ -166,6 +166,62 @@ def create_order_from_agent(payload: dict, api_client_id=None):
     return orders, True
 
 
+def cancel_order_from_agent(agent_order_id: str, reason: str = None, api_client_id=None):
+    """Cancels a synced order and puts its stock back.
+
+    Refused once the goods are on their way — an order that has shipped can't
+    be unshipped, and silently restoring stock for it would corrupt the
+    merchant's inventory.
+    """
+    orders = get_by_agent_order_id(agent_order_id)
+    if not orders:
+        raise NotFoundError("Order not found", code="ORDER_NOT_FOUND")
+
+    shipped = [o for o in orders if o.status in (OrderStatus.SHIPPED, OrderStatus.DELIVERED)]
+    if shipped:
+        raise ValidationError(
+            "This order has already shipped and can no longer be cancelled.",
+            code="ORDER_ALREADY_SHIPPED",
+        )
+
+    cancelled = []
+    for order in orders:
+        if order.status == OrderStatus.CANCELLED:
+            cancelled.append(order)
+            continue
+
+        for item in order.items:
+            variant = ProductVariant.query.get(item.product_variant_id)
+            if variant is None:
+                continue
+            product_service.adjust_stock_internal(
+                variant,
+                item.quantity,  # positive: the reservation goes back
+                reason="ORDER_CANCELLED",
+                reference_type="ORDER",
+                reference_id=order.id,
+                commit=False,
+            )
+
+        order.status = OrderStatus.CANCELLED
+        cancelled.append(order)
+
+    db.session.commit()
+
+    for order in cancelled:
+        audit_service.log_event(
+            actor_type="AGENT",
+            actor_id=api_client_id,
+            merchant_id=order.merchant_id,
+            resource_type="ORDER",
+            resource_id=order.id,
+            action="ORDER_CANCELLED",
+            metadata={"agent_order_id": agent_order_id, "reason": reason,
+                      "stock_restored": True},
+        )
+    return cancelled
+
+
 def get_by_agent_order_id(agent_order_id: str):
     return Order.query.filter(
         (Order.agent_order_id == agent_order_id)
