@@ -140,3 +140,90 @@ export interface ApiClient {
 export interface ApiClientWithKey extends ApiClient {
   api_key: string;
 }
+
+export type OrderStatus =
+  | "DRAFT"
+  | "PENDING_AUTHORIZATION"
+  | "AUTHORIZED"
+  | "PAYMENT_PENDING"
+  | "PAID"
+  | "PAYMENT_FAILED"
+  | "CANCELLED"
+  | "CONFIRMED"
+  | "PACKED"
+  | "SHIPPED"
+  | "DELIVERED";
+
+export type PaymentStatus =
+  | "CREATED"
+  | "PENDING"
+  | "AUTHORIZED"
+  | "CAPTURED"
+  | "FAILED"
+  | "CANCELLED"
+  | "REFUNDED";
+
+/** The states a merchant can move a paid order through. */
+export const FULFILLMENT_FLOW: OrderStatus[] = [
+  "CONFIRMED",
+  "PACKED",
+  "SHIPPED",
+  "DELIVERED",
+];
+
+export interface OrderItem {
+  id: string;
+  order_id: string;
+  product_id: string | null;
+  product_variant_id: string | null;
+  product_name_snapshot: string;
+  quantity: number;
+  unit_price_amount: number;
+  total_amount: number;
+}
+
+export interface Payment {
+  id: string;
+  order_id: string;
+  provider: string;
+  provider_order_id: string | null;
+  provider_payment_id: string | null;
+  amount: number;
+  currency: string;
+  status: PaymentStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Order {
+  id: string;
+  user_id: string | null;
+  merchant_id: string;
+  store_id: string;
+  agent_order_id: string | null;
+  buyer_ref: string | null;
+  status: OrderStatus;
+  payment_status: PaymentStatus | null;
+  currency: string;
+  subtotal_amount: number;
+  tax_amount: number;
+  total_amount: number;
+  item_count: number;
+  placed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  items?: OrderItem[];
+  payments?: Payment[];
+}
+
+export interface PaymentWithOrder extends Payment {
+  order: Order;
+}
+
+export interface OrderStats {
+  total_orders: number;
+  revenue_amount: number;
+  currency: string;
+  awaiting_fulfillment: number;
+  delivered: number;
+}
