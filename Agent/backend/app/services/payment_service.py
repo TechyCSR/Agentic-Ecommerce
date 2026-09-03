@@ -414,3 +414,67 @@ def record_unsuccessful_attempt(
         },
     )
     return order, payment
+
+
+def refund_payment(order, payment, reason: str = None):
+    """Refunds a verified payment in full.
+
+    Bounded by construction: the amount is read from the stored payment, so
+    a refund can never exceed what was actually captured, and only a PAID
+    payment can be refunded at all. Returns (ok, message).
+    """
+    if payment is None or payment.status != PaymentStatus.PAID:
+        return False, "No completed payment to refund."
+    if not payment.provider_payment_id:
+        return False, "This payment has no provider reference to refund against."
+
+    audit_service.log_event(
+        action="REFUND_INITIATED",
+        resource_id=order.id,
+        session_id=order.session_id,
+        buyer_clerk_user_id=order.buyer_clerk_user_id,
+        metadata={
+            "order_id": str(order.id),
+            "payment_id": str(payment.id),
+            "amount": payment.amount,
+            "currency": payment.currency,
+            "reason": reason,
+        },
+    )
+
+    try:
+        _client().payment.refund(
+            payment.provider_payment_id,
+            {"amount": payment.amount, "speed": "normal",
+             "notes": {"order_id": str(order.id), "reason": reason or "buyer_cancelled"}},
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed refund must be recorded, not raised at the buyer
+        audit_service.log_event(
+            action="REFUND_FAILED",
+            resource_id=order.id,
+            session_id=order.session_id,
+            buyer_clerk_user_id=order.buyer_clerk_user_id,
+            metadata={"order_id": str(order.id), "error": str(exc)[:400]},
+        )
+        return False, (
+            "Your order is cancelled, but the refund couldn't be started "
+            "automatically. Our team will process it — nothing further is needed "
+            "from you."
+        )
+
+    payment.status = PaymentStatus.REFUNDED
+    db.session.commit()
+
+    audit_service.log_event(
+        action="REFUND_COMPLETED",
+        resource_id=order.id,
+        session_id=order.session_id,
+        buyer_clerk_user_id=order.buyer_clerk_user_id,
+        metadata={
+            "order_id": str(order.id),
+            "amount": payment.amount,
+            "currency": payment.currency,
+            "status": payment.status.value,
+        },
+    )
+    return True, "Refunded in full — it should reach your account in 5-7 working days."

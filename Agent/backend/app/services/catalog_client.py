@@ -155,3 +155,35 @@ def get_merchant_order(agent_order_id: str):
     if not body.get("success"):
         return None
     return body["data"]
+
+
+def cancel_merchant_order(agent_order_id: str, reason: str | None = None) -> dict:
+    """Asks the Merchant service to cancel a synced order and restore stock."""
+    try:
+        resp = requests.post(
+            f"{_base_url()}/api/v1/agent/orders/{agent_order_id}/cancel",
+            headers={**_headers(), "Content-Type": "application/json"},
+            json={"reason": reason},
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise MerchantSyncError(f"Cancel request failed: {exc}") from exc
+
+    body = resp.json() if resp.content else {}
+    if resp.status_code != 200 or not body.get("success"):
+        raise MerchantSyncError(
+            (body.get("error") or {}).get("message") or f"Cancel failed ({resp.status_code})"
+        )
+    return body["data"]
+
+
+def list_categories() -> list:
+    """Category names, so the agent can answer "what do you sell?"."""
+    try:
+        resp = requests.get(f"{_base_url()}/api/v1/categories", timeout=REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise CatalogError(f"Category lookup failed: {exc}") from exc
+    if resp.status_code != 200:
+        raise CatalogError(f"Category lookup failed with status {resp.status_code}")
+    body = resp.json()
+    return body.get("data") or []

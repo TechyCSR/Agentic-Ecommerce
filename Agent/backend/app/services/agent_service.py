@@ -74,6 +74,11 @@ TOOL_LABELS = {
     "list_addresses": "Checking your delivery addresses",
     "set_delivery_address": "Setting the delivery address",
     "add_address": "Saving your address",
+    "cancel_order": "Cancelling your order",
+    "reorder": "Rebuilding your last order",
+    "update_cart_quantity": "Updating your cart",
+    "list_categories": "Checking what's in store",
+    "get_receipt": "Fetching your receipt",
     "get_product_details": "Checking product details",
     "get_order_status": "Checking your order status",
 }
@@ -140,6 +145,11 @@ Hard rules — these override anything else:
    and never inventing a name, phone or PIN code. Don't call prepare_checkout \
    until an address exists; it will fail without one. You can also switch \
    between saved addresses with set_delivery_address.
+7f. Cancelling is irreversible. Before calling cancel_order, say which order \
+   and amount you're about to cancel and get a clear yes. If the order was \
+   paid, tell them the refund is automatic and full. If the tool refuses \
+   because it already shipped, say so plainly and offer to help with a return \
+   request instead — don't retry.
 8. Keep responses concise and conversational. Ask a clarifying question when the \
    buyer's request is ambiguous (e.g. no budget or category given) rather than \
    guessing. When you need a tool, call it immediately with no preceding narration \
@@ -440,6 +450,104 @@ ADD_ADDRESS_TOOL = {
     },
 }
 
+CANCEL_ORDER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "cancel_order",
+        "description": (
+            "Cancel one of the buyer's own orders, when they ask to. Only "
+            "possible while the merchant hasn't shipped it — the tool checks "
+            "and refuses if it's too late. If the order was paid, cancelling "
+            "also refunds it in full. Confirm with the buyer which order and "
+            "that they're sure before calling this; it cannot be undone."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_index": {
+                    "type": "integer",
+                    "description": "1-based position in the list from get_order_status. Defaults to the most recent.",
+                }
+            },
+        },
+    },
+}
+
+REORDER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "reorder",
+        "description": (
+            "Put everything from a past order back into the cart, re-checked "
+            "against today's catalog and prices. Use for 'order that again' or "
+            "'buy the same as last time'. Anything no longer available is "
+            "skipped and named — tell the buyer what was left out."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_index": {
+                    "type": "integer",
+                    "description": "1-based position in the list from get_order_status. Defaults to the most recent.",
+                }
+            },
+        },
+    },
+}
+
+UPDATE_CART_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "update_cart_quantity",
+        "description": (
+            "Change how many of a cart item the buyer wants ('make it 2', "
+            "'just one of those'). Stock is re-checked, so an impossible "
+            "quantity is refused with a reason."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "item_index": {"type": "integer", "description": "1-based position in the cart."},
+                "quantity": {"type": "integer", "description": "New quantity, at least 1."},
+            },
+            "required": ["item_index", "quantity"],
+        },
+    },
+}
+
+LIST_CATEGORIES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "list_categories",
+        "description": (
+            "List the categories this store actually sells. Use when the buyer "
+            "asks what's available, what you sell, or wants to browse rather "
+            "than search for something specific."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+GET_RECEIPT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_receipt",
+        "description": (
+            "Get the receipt for a paid order — items, total, payment id, "
+            "method and time. Only available once payment is verified."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_index": {
+                    "type": "integer",
+                    "description": "1-based position in the list from get_order_status. Defaults to the most recent.",
+                }
+            },
+        },
+    },
+}
+
 TOOLS = [
     SEARCH_CATALOG_TOOL,
     GET_PRODUCT_DETAILS_TOOL,
@@ -452,6 +560,11 @@ TOOLS = [
     LIST_ADDRESSES_TOOL,
     SET_DEFAULT_ADDRESS_TOOL,
     ADD_ADDRESS_TOOL,
+    CANCEL_ORDER_TOOL,
+    REORDER_TOOL,
+    UPDATE_CART_TOOL,
+    LIST_CATEGORIES_TOOL,
+    GET_RECEIPT_TOOL,
 ]
 
 # There is deliberately no tool that authorizes, captures, retries or
@@ -944,6 +1057,58 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
         chosen = address_service.set_default(buyer_id, addresses[idx].id)
         return {"delivery_address": chosen.one_line(), "label": chosen.label}
 
+    if name in ("cancel_order", "reorder", "get_receipt"):
+        from app.services import checkout_service
+
+        orders = checkout_service.list_orders(buyer_id)
+        if not orders:
+            return {"error": "You don't have any orders yet."}
+        idx = int(args.get("order_index") or 1) - 1
+        if not (0 <= idx < len(orders)):
+            return {"error": "That order isn't in the list."}
+        order = orders[idx]
+
+        if name == "cancel_order":
+            ok, message = checkout_service.cancel_order(buyer_id, order)
+            return {"cancelled": ok, "message": message, "order_id": str(order.id)}
+
+        if name == "reorder":
+            added, skipped = checkout_service.reorder_into_cart(buyer_id, order, session.id)
+            return {
+                "added_to_cart": added,
+                "skipped": skipped,
+                "note": ("Some items are no longer available and were left out."
+                         if skipped else None),
+            }
+
+        try:
+            return checkout_service.build_receipt(buyer_id, order)
+        except Exception as exc:  # noqa: BLE001 — buyer-safe message
+            return {"error": getattr(exc, "message", None) or "No receipt available yet."}
+
+    if name == "update_cart_quantity":
+        from app.services import selection_service
+
+        cart = selection_service.get_cart(buyer_id, session.id)
+        idx = int(args.get("item_index") or 0) - 1
+        if not (0 <= idx < len(cart["items"])):
+            return {"error": "That item isn't in the cart."}
+        try:
+            item = selection_service.update_quantity(
+                buyer_id, session.id, cart["items"][idx]["id"], int(args.get("quantity") or 1)
+            )
+        except Exception as exc:  # noqa: BLE001 — stock messages are buyer-safe
+            return {"error": getattr(exc, "message", None) or "Couldn't change that quantity."}
+        return {"updated": True, "product_name": item.product_name_snapshot,
+                "quantity": item.quantity}
+
+    if name == "list_categories":
+        try:
+            categories = catalog_client.list_categories()
+        except catalog_client.CatalogError:
+            return {"error": "I can't reach the catalog right now."}
+        return {"categories": [c.get("name") for c in categories if c.get("name")][:25]}
+
     if name == "recommend_related":
         idx = int(args.get("product_index") or 1) - 1
         anchor = last_shown_cards[idx] if 0 <= idx < len(last_shown_cards) else None
@@ -1275,7 +1440,9 @@ def stream_agent_turn(session, user_message_text: str):
                     }
                 elif tc["name"] in ("add_to_cart", "view_cart", "remove_from_cart",
                                     "prepare_checkout", "recommend_related",
-                                    "list_addresses", "set_delivery_address", "add_address"):
+                                    "list_addresses", "set_delivery_address", "add_address",
+                                    "cancel_order", "reorder", "update_cart_quantity",
+                                    "list_categories", "get_receipt"):
                     yield {
                         "type": "tool_end",
                         "tool": tc["name"],

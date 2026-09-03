@@ -343,3 +343,94 @@ def clear_cart_for_order(order: Order) -> None:
         session_id=order.session_id, status=SelectionStatus.SELECTED
     ).update({"status": SelectionStatus.SUPERSEDED})
     db.session.commit()
+
+
+def cancel_order(buyer_id: str, order) -> tuple[bool, str]:
+    """Cancels a buyer's own order, refunding it if it was paid.
+
+    Bounded deliberately: only the buyer's own order, only while the merchant
+    hasn't shipped it, and any refund is for exactly what was captured. The
+    merchant is told first — if they refuse (already shipped), nothing is
+    cancelled and no money moves.
+    """
+    from app.services import payment_service
+
+    if order.status == OrderStatus.CANCELLED:
+        return False, "That order is already cancelled."
+
+    fulfillment = get_fulfillment_status(order)
+    if fulfillment in ("SHIPPED", "DELIVERED"):
+        audit_service.log_event(
+            action="ORDER_CANCEL_REFUSED",
+            resource_id=order.id,
+            session_id=order.session_id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={"order_id": str(order.id), "reason": "already_" + fulfillment.lower()},
+        )
+        return False, (
+            f"That order has already been {fulfillment.lower()}, so it can't be "
+            "cancelled here. Ask about a return instead."
+        )
+
+    # Ask the merchant first: they own fulfillment and stock, and they are the
+    # authority on whether it's too late.
+    if order.merchant_synced_at:
+        try:
+            catalog_client.cancel_merchant_order(str(order.id), "buyer_cancelled")
+        except Exception as exc:  # noqa: BLE001 — surfaced to the buyer, never a traceback
+            audit_service.log_event(
+                action="ORDER_CANCEL_REFUSED",
+                resource_id=order.id,
+                session_id=order.session_id,
+                buyer_clerk_user_id=buyer_id,
+                metadata={"order_id": str(order.id), "error": str(exc)[:300]},
+            )
+            return False, (
+                "The store couldn't cancel that order right now — it may already "
+                "be on its way. Please try again shortly."
+            )
+
+    payment = next((p for p in order.payments if p.status == PaymentStatus.PAID), None)
+
+    order.status = OrderStatus.CANCELLED
+    db.session.commit()
+
+    audit_service.log_event(
+        action="ORDER_CANCELLED",
+        resource_id=order.id,
+        session_id=order.session_id,
+        buyer_clerk_user_id=buyer_id,
+        metadata={
+            "order_id": str(order.id),
+            "amount": order.amount_total,
+            "currency": order.currency,
+            "was_paid": payment is not None,
+        },
+    )
+
+    if payment is None:
+        return True, "Your order is cancelled. Nothing was charged."
+
+    refunded, message = payment_service.refund_payment(order, payment, "buyer_cancelled")
+    return True, f"Your order is cancelled. {message}"
+
+
+def reorder_into_cart(buyer_id: str, order, session_id) -> tuple[int, list]:
+    """Puts a past order's items back in the cart, re-validating each one.
+
+    Anything now unavailable or out of stock is skipped and named, rather
+    than silently dropped or added at a stale price.
+    """
+    from app.services import selection_service
+
+    added, skipped = 0, []
+    for item in order.items or []:
+        try:
+            selection_service.add_to_cart(
+                buyer_id, session_id, item["product_id"], item["variant_id"],
+                int(item.get("quantity") or 1),
+            )
+            added += 1
+        except Exception:  # noqa: BLE001 — one unavailable line shouldn't stop the rest
+            skipped.append(item.get("product_name"))
+    return added, skipped
