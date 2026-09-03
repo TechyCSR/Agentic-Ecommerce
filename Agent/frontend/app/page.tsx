@@ -7,6 +7,7 @@ import { AgentHeader } from "@/components/chat/agent-header";
 import { CartDrawer } from "@/components/chat/cart-drawer";
 import { OrdersDrawer } from "@/components/orders/orders-drawer";
 import { ProfileSync } from "@/components/profile-sync";
+import { DeepLinkCheckout } from "@/components/checkout/deep-link-checkout";
 import { ChatInput } from "@/components/chat/chat-input";
 import { EmptyState } from "@/components/chat/empty-state";
 import {
@@ -125,6 +126,7 @@ export default function ChatPage() {
   return (
     <div className="flex h-dvh w-full overflow-hidden">
       <ProfileSync />
+      <DeepLinkCheckout />
       <SessionSidebar {...sidebarProps} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
