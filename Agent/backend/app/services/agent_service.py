@@ -299,6 +299,38 @@ def _format_grounding_context(cards: list[dict]) -> str | None:
     )
 
 
+def _format_order_context(session) -> str | None:
+    """Recent orders for this chat, so the agent knows a purchase happened
+    without having to be asked. Status only — the tool is still the way to
+    get details, and nothing here lets it move money."""
+    from app.models import Order  # local import keeps model imports lazy here
+
+    orders = (
+        Order.query.filter_by(session_id=session.id)
+        .order_by(Order.created_at.desc())
+        .limit(3)
+        .all()
+    )
+    if not orders:
+        return None
+
+    lines = []
+    for o in orders:
+        payment = o.latest_payment()
+        amount = o.amount_total / 100
+        symbol = "₹" if o.currency == "INR" else f"{o.currency} "
+        lines.append(
+            f"- Order {o.id}: {symbol}{amount:,.0f}, order status "
+            f"{o.status.value if o.status else 'UNKNOWN'}, payment "
+            f"{payment.status.value if payment and payment.status else 'NONE'}"
+        )
+    return (
+        "[Context — this buyer's orders in this chat. Use get_order_status for "
+        "details or delivery status; never state a payment outcome that isn't "
+        "shown here or in a tool result:\n" + "\n".join(lines) + "]"
+    )
+
+
 def _build_messages(session, grounding: str | None) -> list[dict]:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -468,6 +500,9 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                         }
                         for i in (o.items or [])
                     ],
+                    # Read back from the merchant, so "where is my order?" is
+                    # answered from the seller's real fulfillment state.
+                    "fulfillment_status": checkout_service.get_fulfillment_status(o),
                     "payment_id": (
                         o.latest_payment().provider_payment_id if o.latest_payment() else None
                     ),
@@ -644,6 +679,9 @@ def stream_agent_turn(session, user_message_text: str):
 
     last_shown_cards = _get_last_shown_cards(session)
     grounding = _format_grounding_context(last_shown_cards)
+    order_context = _format_order_context(session)
+    if order_context:
+        grounding = f"{order_context}\n\n{grounding}" if grounding else order_context
     messages = _build_messages(session, grounding)
 
     client = _client()
