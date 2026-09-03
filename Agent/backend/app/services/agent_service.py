@@ -477,7 +477,7 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             except Exception:  # noqa: BLE001 — unknown/forbidden id is answerable, not fatal
                 return {"error": "No order found with that id for this buyer."}
         else:
-            orders = checkout_service.list_orders(buyer_id)[:5]
+            orders = checkout_service.list_orders(buyer_id)[:3]
 
         audit_service.log_event(
             action="ORDER_STATUS_REQUESTED",
@@ -511,8 +511,16 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                         for i in (o.items or [])
                     ],
                     # Read back from the merchant, so "where is my order?" is
-                    # answered from the seller's real fulfillment state.
-                    "fulfillment_status": checkout_service.get_fulfillment_status(o),
+                    # answered from the seller's real fulfillment state. Each
+                    # lookup is a ~6s cross-region HTTP call, so it is limited
+                    # to the most recent order — asking about delivery almost
+                    # always means the latest one, and fetching it for every
+                    # order made a single turn tens of seconds slower.
+                    "fulfillment_status": (
+                        checkout_service.get_fulfillment_status(o)
+                        if idx == 0
+                        else None
+                    ),
                     "payment_id": (
                         o.latest_payment().provider_payment_id if o.latest_payment() else None
                     ),
@@ -522,7 +530,7 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                     "created_at": o.created_at.isoformat() if o.created_at else None,
                     "confirmed_at": o.confirmed_at.isoformat() if o.confirmed_at else None,
                 }
-                for o in orders
+                for idx, o in enumerate(orders)
             ]
         }
 
