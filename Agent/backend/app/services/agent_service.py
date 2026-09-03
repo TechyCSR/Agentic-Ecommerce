@@ -73,6 +73,7 @@ TOOL_LABELS = {
     "recommend_related": "Finding things that go with it",
     "list_addresses": "Checking your delivery addresses",
     "set_delivery_address": "Setting the delivery address",
+    "add_address": "Saving your address",
     "get_product_details": "Checking product details",
     "get_order_status": "Checking your order status",
 }
@@ -135,9 +136,10 @@ Hard rules — these override anything else:
 7e. Before preparing checkout, make sure the buyer knows where it's going. \
    Call list_addresses; if they have one, state it in a short line ("Delivering \
    to Home — 12 MG Road, Bengaluru") and continue. If they have none, tell them \
-   to add a delivery address from the Addresses panel and don't call \
-   prepare_checkout — it will fail without one. You can switch between saved \
-   addresses with set_delivery_address, but you cannot create or edit them.
+   save it with add_address — asking only for whatever it reports missing, \
+   and never inventing a name, phone or PIN code. Don't call prepare_checkout \
+   until an address exists; it will fail without one. You can also switch \
+   between saved addresses with set_delivery_address.
 8. Keep responses concise and conversational. Ask a clarifying question when the \
    buyer's request is ambiguous (e.g. no budget or category given) rather than \
    guessing. When you need a tool, call it immediately with no preceding narration \
@@ -405,6 +407,39 @@ SET_DEFAULT_ADDRESS_TOOL = {
     },
 }
 
+ADD_ADDRESS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "add_address",
+        "description": (
+            "Save a delivery address the buyer types in chat. CALL THIS "
+            "whenever they state or dictate an address — e.g. 'deliver to 12 MG "
+            "Road Bengaluru', 'set delivery address to ...', 'ship it to my "
+            "office at ...' — even if parts are missing.\n\n"
+            "Map their words onto the fields yourself: the building/street/area "
+            "becomes line1, the city becomes city, a 6-digit number is "
+            "postal_code, a 10-digit number is phone. Carry over details they "
+            "gave in earlier messages in this conversation.\n\n"
+            "If something required is still missing the result lists exactly "
+            "what — ask only for those, then call this again with the full set. "
+            "Never invent a name, phone number or PIN code."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "description": "Home, Office, etc."},
+                "full_name": {"type": "string"},
+                "phone": {"type": "string"},
+                "line1": {"type": "string", "description": "Building, street, area."},
+                "line2": {"type": "string"},
+                "city": {"type": "string"},
+                "state": {"type": "string"},
+                "postal_code": {"type": "string", "description": "PIN / ZIP code."},
+            },
+        },
+    },
+}
+
 TOOLS = [
     SEARCH_CATALOG_TOOL,
     GET_PRODUCT_DETAILS_TOOL,
@@ -416,6 +451,7 @@ TOOLS = [
     RECOMMEND_RELATED_TOOL,
     LIST_ADDRESSES_TOOL,
     SET_DEFAULT_ADDRESS_TOOL,
+    ADD_ADDRESS_TOOL,
 ]
 
 # There is deliberately no tool that authorizes, captures, retries or
@@ -729,6 +765,17 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                     "payment_id": (
                         o.latest_payment().provider_payment_id if o.latest_payment() else None
                     ),
+                    "payment_method": (
+                        o.latest_payment().method if o.latest_payment() else None
+                    ),
+                    "payment_method_detail": (
+                        o.latest_payment().method_detail if o.latest_payment() else None
+                    ),
+                    "paid_at": (
+                        o.latest_payment().paid_at.isoformat()
+                        if o.latest_payment() and o.latest_payment().paid_at
+                        else None
+                    ),
                     "failure_reason": (
                         o.latest_payment().failure_reason if o.latest_payment() else None
                     ),
@@ -837,7 +884,7 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             ),
         }
 
-    if name in ("list_addresses", "set_delivery_address"):
+    if name in ("list_addresses", "set_delivery_address", "add_address"):
         from app.services import address_service
 
         if name == "list_addresses":
@@ -859,6 +906,35 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                     "No saved addresses. The buyer must add one from the Addresses "
                     "panel — you cannot create one for them."
                 ),
+            }
+
+        if name == "add_address":
+            # Report precisely what's missing so the agent asks once, for the
+            # right things, instead of guessing a phone number or PIN.
+            required = {
+                "full_name": "the recipient's full name",
+                "phone": "a contact phone number",
+                "line1": "the street address",
+                "city": "the city",
+                "postal_code": "the PIN code",
+            }
+            missing = [label for field, label in required.items()
+                       if not (args.get(field) or "").strip()]
+            if missing:
+                return {
+                    "saved": False,
+                    "missing": missing,
+                    "note": "Ask the buyer for exactly these, then call add_address again.",
+                }
+            try:
+                address = address_service.create_address(buyer_id, args)
+            except Exception as exc:  # noqa: BLE001 — validation messages are buyer-safe
+                return {"error": getattr(exc, "message", None) or "Couldn't save that address."}
+            return {
+                "saved": True,
+                "delivery_address": address.one_line(),
+                "label": address.label,
+                "is_default": address.is_default,
             }
 
         addresses = address_service.list_addresses(buyer_id)
@@ -1199,7 +1275,7 @@ def stream_agent_turn(session, user_message_text: str):
                     }
                 elif tc["name"] in ("add_to_cart", "view_cart", "remove_from_cart",
                                     "prepare_checkout", "recommend_related",
-                                    "list_addresses", "set_delivery_address"):
+                                    "list_addresses", "set_delivery_address", "add_address"):
                     yield {
                         "type": "tool_end",
                         "tool": tc["name"],
