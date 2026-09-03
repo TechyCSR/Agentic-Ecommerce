@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { AgentHeader } from "@/components/chat/agent-header";
 import { CartDrawer } from "@/components/chat/cart-drawer";
+import { OrdersDrawer } from "@/components/orders/orders-drawer";
 import { ChatInput } from "@/components/chat/chat-input";
 import { EmptyState } from "@/components/chat/empty-state";
 import {
@@ -111,7 +112,12 @@ export default function ChatPage() {
     lastMessage?.role === "assistant" &&
     (lastMessage.suggested_replies?.length ?? 0) > 0;
 
-  const cartSlot = activeId ? <CartDrawer sessionId={activeId} cart={cart} /> : null;
+  const cartSlot = (
+    <div className="flex items-center gap-2">
+      <OrdersDrawer />
+      {activeId ? <CartDrawer sessionId={activeId} cart={cart} /> : null}
+    </div>
+  );
   const isThisSession = stream.sessionId === activeId;
   const showEmptyState = !activeId || (messages.length === 0 && !stream.isStreaming && !stream.error);
 

@@ -5,13 +5,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "@/lib/use-api";
 import type { Order, PaymentAuthorization, PaymentRecord, Receipt } from "@/lib/types";
 
-export function useOrders(sessionId?: string) {
+export function useOrders(sessionId?: string, enabled = true) {
   const api = useApi();
 
   return useQuery({
     queryKey: ["orders", sessionId ?? "all"],
     queryFn: () =>
       api.get<Order[]>(`/api/v1/orders${sessionId ? `?session_id=${sessionId}` : ""}`),
+    enabled,
   });
 }
 
@@ -71,11 +72,20 @@ export function useVerifyPayment() {
         razorpay_payment_id: razorpayPaymentId,
         razorpay_signature: razorpaySignature,
       }),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["order", variables.orderId] });
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       // The cart is consumed by a confirmed order, so refresh it too.
       queryClient.invalidateQueries({ queryKey: ["chat-cart"] });
+      // The backend posts an "order confirmed" message into the session on
+      // verification. Without refetching it, that message wouldn't appear
+      // until the buyer reloaded or sent another message.
+      if (data?.order?.session_id) {
+        queryClient.invalidateQueries({
+          queryKey: ["chat-session", data.order.session_id],
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
     },
   });
 }
