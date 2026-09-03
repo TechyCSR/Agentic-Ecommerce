@@ -1,6 +1,7 @@
-"""Sole gateway to product data — every call goes through Merchant Phase 1's
-existing agent-readable catalog API (central API key, catalog:read +
-product:read scopes). This service never touches product tables directly.
+"""Sole gateway to the Merchant service — catalog reads and order
+registration both go through its agent API with the central API key
+(catalog:read + product:read + checkout:create). This service never touches
+Merchant's tables directly.
 """
 
 import requests
@@ -9,6 +10,15 @@ from flask import current_app
 
 class CatalogError(Exception):
     """Raised when the Merchant agent API can't be reached or errors."""
+
+
+class MerchantSyncError(Exception):
+    """Raised when registering an order with the Merchant service fails.
+
+    Kept distinct from CatalogError because the caller treats it very
+    differently: by sync time the buyer has already paid, so this must never
+    unwind the order — only be recorded and retried.
+    """
 
 
 def _headers():
@@ -86,4 +96,56 @@ def get_product(product_id: str):
     if not body.get("success"):
         raise CatalogError(body.get("error", {}).get("message", "Product lookup failed"))
 
+    return body["data"]
+
+
+def create_order(payload: dict) -> dict:
+    """Registers a paid order with the Merchant service.
+
+    Idempotent on the Merchant side via `agent_order_id`, so a retry after a
+    timeout is safe and will not create a duplicate order or decrement stock
+    twice.
+    """
+    try:
+        resp = requests.post(
+            f"{_base_url()}/api/v1/agent/orders",
+            headers={**_headers(), "Content-Type": "application/json"},
+            json=payload,
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise MerchantSyncError(f"Order sync request failed: {exc}") from exc
+
+    if resp.status_code not in (200, 201):
+        raise MerchantSyncError(
+            f"Order sync failed with status {resp.status_code}: {resp.text[:200]}"
+        )
+
+    body = resp.json()
+    if not body.get("success"):
+        raise MerchantSyncError(body.get("error", {}).get("message", "Order sync failed"))
+
+    return body["data"]
+
+
+def get_merchant_order(agent_order_id: str):
+    """Reads fulfillment status back from the Merchant service, so the agent
+    can answer "where is my order?". Returns None if it hasn't synced."""
+    try:
+        resp = requests.get(
+            f"{_base_url()}/api/v1/agent/orders/{agent_order_id}",
+            headers=_headers(),
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        raise MerchantSyncError(f"Order lookup request failed: {exc}") from exc
+
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise MerchantSyncError(f"Order lookup failed with status {resp.status_code}")
+
+    body = resp.json()
+    if not body.get("success"):
+        return None
     return body["data"]

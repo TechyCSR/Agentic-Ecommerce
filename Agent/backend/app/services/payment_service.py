@@ -17,8 +17,8 @@ import razorpay
 from flask import current_app
 
 from app.extensions import db
-from app.models import Payment
-from app.models.enums import OrderStatus, PaymentProvider, PaymentStatus
+from app.models import ChatMessage, Payment
+from app.models.enums import MessageRole, OrderStatus, PaymentProvider, PaymentStatus
 from app.services import audit_service, checkout_service
 from app.utils.exceptions import ValidationError
 
@@ -220,6 +220,26 @@ def verify_payment(
             code="PAYMENT_VERIFICATION_FAILED",
         )
 
+    _mark_paid_and_confirm(order, payment, provider_payment_id, source="browser")
+
+    checkout_service.clear_cart_for_order(order)
+
+    # Tell the seller, and tell the buyer's own conversation. Both are
+    # best-effort on purpose — the payment is already verified and must stand
+    # regardless of what either of these does.
+    checkout_service.sync_order_to_merchant(order)
+    _post_order_confirmation_to_chat(order, payment)
+
+    return order, payment
+
+
+def _mark_paid_and_confirm(order, payment, provider_payment_id, source: str):
+    """The single place a payment becomes PAID and an order CONFIRMED.
+
+    Shared by browser verification and the Razorpay webhook so the two can
+    never diverge — whichever arrives first does the work, and the other
+    finds it already done.
+    """
     payment.provider_payment_id = provider_payment_id
     payment.status = PaymentStatus.PAID
     payment.paid_at = datetime.now(timezone.utc)
@@ -232,7 +252,7 @@ def verify_payment(
         action="PAYMENT_VERIFIED",
         resource_id=order.id,
         session_id=order.session_id,
-        buyer_clerk_user_id=buyer_id,
+        buyer_clerk_user_id=order.buyer_clerk_user_id,
         metadata={
             "order_id": str(order.id),
             "payment_id": str(payment.id),
@@ -240,23 +260,81 @@ def verify_payment(
             "amount": payment.amount,
             "currency": payment.currency,
             "status": payment.status.value,
+            "source": source,
         },
     )
     audit_service.log_event(
         action="ORDER_CONFIRMED",
         resource_id=order.id,
         session_id=order.session_id,
-        buyer_clerk_user_id=buyer_id,
+        buyer_clerk_user_id=order.buyer_clerk_user_id,
         metadata={
             "order_id": str(order.id),
             "amount": order.amount_total,
             "currency": order.currency,
             "status": order.status.value,
+            "source": source,
         },
     )
 
+
+def confirm_payment_from_webhook(order, payment, provider_payment_id):
+    """Webhook entry point. Razorpay's own call already proves the payment,
+    so there's no client signature to check here — the request itself was
+    authenticated by its webhook signature before reaching this."""
+    _mark_paid_and_confirm(order, payment, provider_payment_id, source="webhook")
     checkout_service.clear_cart_for_order(order)
+    checkout_service.sync_order_to_merchant(order)
+    _post_order_confirmation_to_chat(order, payment)
     return order, payment
+
+
+def _post_order_confirmation_to_chat(order, payment):
+    """Writes the confirmation into the chat session as a real assistant
+    message, so the agent knows an order exists without being asked and the
+    buyer sees it in the conversation they bought from."""
+    if not order.session_id:
+        return
+    try:
+        lines = ", ".join(
+            f"{i.get('quantity')} x {i.get('product_name')}" for i in (order.items or [])
+        )
+        amount = order.amount_total / 100
+        symbol = "₹" if order.currency == "INR" else f"{order.currency} "
+        text = (
+            f"✅ **Payment verified — your order is confirmed.**\n\n"
+            f"- **Order ID:** `{order.id}`\n"
+            f"- **Items:** {lines}\n"
+            f"- **Amount paid:** {symbol}{amount:,.0f}\n"
+            f"- **Payment status:** PAID\n"
+            f"- **Order status:** CONFIRMED\n"
+        )
+        if payment and payment.provider_payment_id:
+            text += f"- **Payment ID:** `{payment.provider_payment_id}`\n"
+        text += "\nAsk me any time if you'd like to check its status."
+
+        db.session.add(
+            ChatMessage(
+                session_id=order.session_id,
+                role=MessageRole.ASSISTANT,
+                content=text,
+                suggested_replies=[
+                    "Where is my order?",
+                    "Show my order details",
+                    "Find me something else",
+                ],
+            )
+        )
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001 — a chat write must never affect a verified payment
+        db.session.rollback()
+        audit_service.log_event(
+            action="ORDER_CHAT_NOTICE_FAILED",
+            resource_id=order.id,
+            session_id=order.session_id,
+            buyer_clerk_user_id=order.buyer_clerk_user_id,
+            metadata={"error": str(exc)[:300]},
+        )
 
 
 def record_unsuccessful_attempt(

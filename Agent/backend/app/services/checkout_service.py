@@ -7,6 +7,8 @@ that response, so a stale cart snapshot or a tampered request can't set
 the amount that gets charged.
 """
 
+from datetime import datetime, timezone
+
 from flask import current_app
 
 from app.extensions import db
@@ -240,6 +242,81 @@ def build_receipt(buyer_id: str, order: Order) -> dict:
         "paid_at": payment.paid_at.isoformat() if payment.paid_at else None,
         "created_at": order.created_at.isoformat() if order.created_at else None,
     }
+
+
+def sync_order_to_merchant(order: Order) -> bool:
+    """Registers a paid order with the Merchant service so the seller sees it.
+
+    Never raises: by the time this runs the buyer has been charged, so a
+    Merchant-side failure must not unwind a confirmed order. It records
+    MERCHANT_SYNC_FAILED and leaves the order retryable instead.
+    """
+    if order.merchant_synced_at:
+        return True
+
+    payment = next((p for p in order.payments if p.status == PaymentStatus.PAID), None)
+    payload = {
+        "agent_order_id": str(order.id),
+        "buyer_ref": order.buyer_clerk_user_id,
+        "currency": order.currency,
+        "items": [
+            {"variant_id": item["variant_id"], "quantity": item["quantity"]}
+            for item in (order.items or [])
+        ],
+        "payment": {
+            "provider_order_id": payment.provider_order_id if payment else None,
+            "provider_payment_id": payment.provider_payment_id if payment else None,
+        },
+    }
+
+    try:
+        data = catalog_client.create_order(payload)
+    except Exception as exc:  # noqa: BLE001 — a paid order must never be rolled back by a sync failure
+        audit_service.log_event(
+            action="MERCHANT_SYNC_FAILED",
+            resource_id=order.id,
+            session_id=order.session_id,
+            buyer_clerk_user_id=order.buyer_clerk_user_id,
+            metadata={"order_id": str(order.id), "error": str(exc)[:500]},
+        )
+        return False
+
+    order.merchant_order_ids = [o["id"] for o in data.get("orders", [])]
+    order.merchant_synced_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+    audit_service.log_event(
+        action="MERCHANT_SYNC_SUCCEEDED",
+        resource_id=order.id,
+        session_id=order.session_id,
+        buyer_clerk_user_id=order.buyer_clerk_user_id,
+        metadata={
+            "order_id": str(order.id),
+            "merchant_order_ids": order.merchant_order_ids,
+            "already_existed": not data.get("created", True),
+        },
+    )
+    return True
+
+
+def get_fulfillment_status(order: Order) -> str | None:
+    """Reads the merchant's fulfillment status back, for "where is my order?".
+    Returns None when unsynced or unreachable — never raises into a chat turn."""
+    if not order.merchant_synced_at:
+        return None
+    try:
+        data = catalog_client.get_merchant_order(str(order.id))
+    except Exception:  # noqa: BLE001 — a status lookup must not break the reply
+        return None
+    if not data or not data.get("orders"):
+        return None
+    # One cart can span stores; report the least-advanced status so the buyer
+    # isn't told "delivered" while part of the order is still being packed.
+    statuses = [o.get("status") for o in data["orders"] if o.get("status")]
+    for stage in ("PAID", "CONFIRMED", "PACKED", "SHIPPED", "DELIVERED"):
+        if stage in statuses:
+            return stage
+    return statuses[0] if statuses else None
 
 
 def clear_cart_for_order(order: Order) -> None:

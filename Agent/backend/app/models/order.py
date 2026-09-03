@@ -35,6 +35,11 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, db.Model):
 
     confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
+    # Ids of the order(s) this became in the Merchant service. A list because
+    # one cart can span stores, and a Merchant order belongs to exactly one.
+    merchant_order_ids = db.Column(JSONB, nullable=True)
+    merchant_synced_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
     payments = db.relationship(
         "Payment",
         back_populates="order",
@@ -58,6 +63,10 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, db.Model):
             "payment_status": latest.status.value if latest and latest.status else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
+            "merchant_order_ids": self.merchant_order_ids or [],
+            "merchant_synced_at": (
+                self.merchant_synced_at.isoformat() if self.merchant_synced_at else None
+            ),
         }
         if include_payments:
             data["payments"] = [p.to_dict() for p in self.payments]

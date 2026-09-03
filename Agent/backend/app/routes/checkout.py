@@ -81,3 +81,13 @@ def record_failure(order_id):
 def get_receipt(order_id):
     order = checkout_service.get_order_for_buyer(g.buyer_id, order_id)
     return success(checkout_service.build_receipt(g.buyer_id, order))
+
+
+@bp.route("/orders/<uuid:order_id>/sync", methods=["POST"])
+@require_auth
+def resync_order(order_id):
+    """Retries registering a paid order with the merchant, for the case where
+    the automatic sync at confirmation time failed."""
+    order = checkout_service.get_order_for_buyer(g.buyer_id, order_id)
+    synced = checkout_service.sync_order_to_merchant(order)
+    return success({"synced": synced, "order": order.to_dict()})
