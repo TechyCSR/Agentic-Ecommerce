@@ -14,7 +14,7 @@ from flask import current_app
 from app.extensions import db
 from app.models import Order, SelectedProduct
 from app.models.enums import OrderStatus, PaymentStatus, SelectionStatus
-from app.services import audit_service, catalog_client, chat_service
+from app.services import address_service, audit_service, catalog_client, chat_service
 from app.utils.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 
@@ -169,6 +169,22 @@ def create_checkout(buyer_id: str, session_id) -> Order:
             code="AMOUNT_OVER_LIMIT",
         )
 
+    # A physical order needs somewhere to go. Asking here — before any money
+    # is authorized — keeps the failure cheap and explainable.
+    address = address_service.get_default(buyer_id)
+    if address is None:
+        audit_service.log_event(
+            action="CHECKOUT_REJECTED",
+            session_id=session.id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={"reason": "no_delivery_address"},
+        )
+        raise ValidationError(
+            "I need a delivery address before placing this order. Add one and "
+            "I'll get it ready.",
+            code="ADDRESS_REQUIRED",
+        )
+
     order = Order(
         session_id=session.id,
         buyer_clerk_user_id=buyer_id,
@@ -176,6 +192,7 @@ def create_checkout(buyer_id: str, session_id) -> Order:
         amount_total=amount_total,
         currency=currencies.pop(),
         status=OrderStatus.CREATED,
+        shipping_address=address.to_dict(),
     )
     db.session.add(order)
     db.session.commit()

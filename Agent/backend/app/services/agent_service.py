@@ -71,6 +71,8 @@ TOOL_LABELS = {
     "remove_from_cart": "Updating your cart",
     "prepare_checkout": "Preparing your order",
     "recommend_related": "Finding things that go with it",
+    "list_addresses": "Checking your delivery addresses",
+    "set_delivery_address": "Setting the delivery address",
     "get_product_details": "Checking product details",
     "get_order_status": "Checking your order status",
 }
@@ -126,6 +128,16 @@ Hard rules — these override anything else:
    recommend_related once to suggest genuinely complementary items from the \
    catalog, and mention them briefly. Never invent an accessory, never claim a \
    discount or bundle that no tool returned, and drop it if they say no.
+7d. Never put image markdown, raw URLs or long ids in your reply text. Product \
+   photos, prices and buttons are rendered from the tool data as cards next to \
+   your message — writing them out again shows the buyer a giant duplicate \
+   image and an unreadable wall of links. Describe products in words only.
+7e. Before preparing checkout, make sure the buyer knows where it's going. \
+   Call list_addresses; if they have one, state it in a short line ("Delivering \
+   to Home — 12 MG Road, Bengaluru") and continue. If they have none, tell them \
+   to add a delivery address from the Addresses panel and don't call \
+   prepare_checkout — it will fail without one. You can switch between saved \
+   addresses with set_delivery_address, but you cannot create or edit them.
 8. Keep responses concise and conversational. Ask a clarifying question when the \
    buyer's request is ambiguous (e.g. no budget or category given) rather than \
    guessing. When you need a tool, call it immediately with no preceding narration \
@@ -357,6 +369,42 @@ RECOMMEND_RELATED_TOOL = {
     },
 }
 
+LIST_ADDRESSES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "list_addresses",
+        "description": (
+            "Show the buyer's saved delivery addresses and which is the "
+            "default. Use before preparing checkout so you can confirm where "
+            "the order is going, or when they ask about delivery."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+SET_DEFAULT_ADDRESS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "set_delivery_address",
+        "description": (
+            "Choose which saved address this order ships to, by its number in "
+            "the list. Use when the buyer picks one ('send it to my office'). "
+            "It cannot create an address — if they have none, tell them to add "
+            "one from the Addresses panel."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "address_index": {
+                    "type": "integer",
+                    "description": "1-based position in the list from list_addresses.",
+                }
+            },
+            "required": ["address_index"],
+        },
+    },
+}
+
 TOOLS = [
     SEARCH_CATALOG_TOOL,
     GET_PRODUCT_DETAILS_TOOL,
@@ -366,6 +414,8 @@ TOOLS = [
     REMOVE_FROM_CART_TOOL,
     PREPARE_CHECKOUT_TOOL,
     RECOMMEND_RELATED_TOOL,
+    LIST_ADDRESSES_TOOL,
+    SET_DEFAULT_ADDRESS_TOOL,
 ]
 
 # There is deliberately no tool that authorizes, captures, retries or
@@ -537,13 +587,14 @@ def _build_suggestions(
     return ["Search something else"]
 
 
-def _persist_assistant_reply(session, text: str, cards: list[dict], suggestions: list[str] | None):
+def _persist_assistant_reply(session, text: str, cards: list[dict], suggestions: list[str] | None, prepared_checkout=None):
     message = ChatMessage(
         session_id=session.id,
         role=MessageRole.ASSISTANT,
         content=text,
         product_cards=cards or None,
         suggested_replies=suggestions or None,
+        prepared_checkout=prepared_checkout,
     )
     db.session.add(message)
     if not session.title:
@@ -786,6 +837,37 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             ),
         }
 
+    if name in ("list_addresses", "set_delivery_address"):
+        from app.services import address_service
+
+        if name == "list_addresses":
+            addresses = address_service.list_addresses(buyer_id)
+            return {
+                "addresses": [
+                    {
+                        "index": i + 1,
+                        "label": a.label,
+                        "full_name": a.full_name,
+                        "address": a.one_line(),
+                        "is_default": a.is_default,
+                    }
+                    for i, a in enumerate(addresses)
+                ],
+                "has_any": bool(addresses),
+                "note": (
+                    None if addresses else
+                    "No saved addresses. The buyer must add one from the Addresses "
+                    "panel — you cannot create one for them."
+                ),
+            }
+
+        addresses = address_service.list_addresses(buyer_id)
+        idx = int(args.get("address_index") or 0) - 1
+        if not (0 <= idx < len(addresses)):
+            return {"error": "That address isn't in the list."}
+        chosen = address_service.set_default(buyer_id, addresses[idx].id)
+        return {"delivery_address": chosen.one_line(), "label": chosen.label}
+
     if name == "recommend_related":
         idx = int(args.get("product_index") or 1) - 1
         anchor = last_shown_cards[idx] if 0 <= idx < len(last_shown_cards) else None
@@ -947,7 +1029,10 @@ def _emit_final(
     checkout_ready: list | None = None,
 ):
     checkout_ready = checkout_ready or []
-    message = _persist_assistant_reply(session, text, list(collected_cards.values()), suggestions)
+    message = _persist_assistant_reply(
+        session, text, list(collected_cards.values()), suggestions,
+        prepared_checkout=checkout_ready[-1] if checkout_ready else None,
+    )
     if not already_streamed:
         # Only the fallback paths land here — their text was never streamed
         # live, so it still needs sending.
@@ -1113,7 +1198,8 @@ def stream_agent_turn(session, user_message_text: str):
                         "product_name": result_payload.get("name"),
                     }
                 elif tc["name"] in ("add_to_cart", "view_cart", "remove_from_cart",
-                                    "prepare_checkout", "recommend_related"):
+                                    "prepare_checkout", "recommend_related",
+                                    "list_addresses", "set_delivery_address"):
                     yield {
                         "type": "tool_end",
                         "tool": tc["name"],

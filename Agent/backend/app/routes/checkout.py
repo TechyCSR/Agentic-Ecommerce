@@ -1,7 +1,7 @@
 from flask import Blueprint, g, request
 
 from app.middleware.clerk_auth import require_auth
-from app.services import checkout_service, payment_service
+from app.services import address_service, checkout_service, payment_service
 from app.utils.exceptions import ValidationError
 from app.utils.responses import success
 
@@ -154,3 +154,41 @@ def money_trail():
             for e in events
         ]
     )
+
+
+# ---- Address book ----
+
+
+@bp.route("/addresses", methods=["GET"])
+@require_auth
+def list_addresses():
+    return success([a.to_dict() for a in address_service.list_addresses(g.buyer_id)])
+
+
+@bp.route("/addresses", methods=["POST"])
+@require_auth
+def create_address():
+    address = address_service.create_address(g.buyer_id, request.get_json(silent=True) or {})
+    return success(address.to_dict(), status=201)
+
+
+@bp.route("/addresses/<uuid:address_id>", methods=["PATCH"])
+@require_auth
+def update_address(address_id):
+    address = address_service.update_address(
+        g.buyer_id, address_id, request.get_json(silent=True) or {}
+    )
+    return success(address.to_dict())
+
+
+@bp.route("/addresses/<uuid:address_id>/default", methods=["POST"])
+@require_auth
+def set_default_address(address_id):
+    return success(address_service.set_default(g.buyer_id, address_id).to_dict())
+
+
+@bp.route("/addresses/<uuid:address_id>", methods=["DELETE"])
+@require_auth
+def delete_address(address_id):
+    address_service.delete_address(g.buyer_id, address_id)
+    return success(None)
