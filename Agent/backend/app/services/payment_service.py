@@ -233,6 +233,42 @@ def verify_payment(
     return order, payment
 
 
+def _describe_method(entity: dict) -> tuple[str | None, str | None]:
+    """Turns Razorpay's payment entity into a method plus a safe descriptor.
+
+    Only non-sensitive fragments are kept — network and last4, bank or wallet
+    name, or a UPI handle. Never a full instrument number.
+    """
+    method = entity.get("method")
+    detail = None
+    if method == "card":
+        card = entity.get("card") or {}
+        bits = [card.get("network"), card.get("last4") and f"•••• {card['last4']}"]
+        detail = " ".join(b for b in bits if b) or None
+    elif method == "upi":
+        detail = entity.get("vpa")
+    elif method == "netbanking":
+        detail = entity.get("bank")
+    elif method == "wallet":
+        detail = entity.get("wallet")
+    return method, detail
+
+
+def _fetch_payment_method(payment, provider_payment_id):
+    """Reads back how the payment was actually made. Best-effort: a failure
+    here must never affect an already-verified payment."""
+    if not provider_payment_id:
+        return
+    try:
+        entity = _client().payment.fetch(provider_payment_id)
+    except Exception:  # noqa: BLE001 — cosmetic detail, never worth failing a payment over
+        return
+    method, detail = _describe_method(entity or {})
+    if method:
+        payment.method = method
+        payment.method_detail = detail
+
+
 def _mark_paid_and_confirm(order, payment, provider_payment_id, source: str):
     """The single place a payment becomes PAID and an order CONFIRMED.
 
@@ -243,6 +279,7 @@ def _mark_paid_and_confirm(order, payment, provider_payment_id, source: str):
     payment.provider_payment_id = provider_payment_id
     payment.status = PaymentStatus.PAID
     payment.paid_at = datetime.now(timezone.utc)
+    _fetch_payment_method(payment, provider_payment_id)
 
     order.status = OrderStatus.CONFIRMED
     order.confirmed_at = datetime.now(timezone.utc)
@@ -260,6 +297,7 @@ def _mark_paid_and_confirm(order, payment, provider_payment_id, source: str):
             "amount": payment.amount,
             "currency": payment.currency,
             "status": payment.status.value,
+            "method": payment.method,
             "source": source,
         },
     )
