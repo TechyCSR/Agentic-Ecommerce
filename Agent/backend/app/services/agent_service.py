@@ -49,6 +49,16 @@ LLM_MAX_RETRIES = 1
 FIXED_SEARCH_FAILURE_MESSAGE = (
     "I'm unable to search the catalog right now. Please try again."
 )
+# Distinct from the catalog message on purpose: telling a buyer the catalog is
+# down when it was the model that stalled sends them chasing the wrong thing.
+FIXED_LLM_FAILURE_MESSAGE = (
+    "I'm having trouble responding right now. Please try again in a moment."
+)
+# One retry per round. Measured against the current provider, back-to-back
+# identical calls returned in 6.7s, 10.4s, 40.5s and one 500 — so a single
+# immediate retry rescues a large share of turns that would otherwise fall
+# back. Only retried when nothing has reached the client yet.
+LLM_ROUND_RETRIES = 1
 FIXED_LOOP_LIMIT_MESSAGE = (
     "I'm having trouble narrowing this down. Could you tell me a bit more "
     "about what you're looking for?"
@@ -570,6 +580,7 @@ def _consume_stream_round(client, model, messages, state: dict):
     # Kept current as we go (not just at the end) so the caller can still tell
     # what reached the client if this round raises part-way through.
     state["streamed_text"] = False
+    state["emitted_any"] = False
 
     q: queue.Queue = queue.Queue()
     threading.Thread(target=_produce_stream, args=(client, model, messages, q), daemon=True).start()
@@ -600,6 +611,7 @@ def _consume_stream_round(client, model, messages, state: dict):
             yield {"type": "token", "delta": delta.content}
             emitted_text = True
             state["streamed_text"] = True
+            state["emitted_any"] = True
         if delta and delta.tool_calls:
             if emitted_text:
                 # This round is calling a tool after all, so everything streamed
@@ -619,6 +631,7 @@ def _consume_stream_round(client, model, messages, state: dict):
                         entry["arguments"] += tc.function.arguments
                 if tc.index not in started and entry["name"]:
                     started.add(tc.index)
+                    state["emitted_any"] = True
                     yield {"type": "tool_start", "tool": entry["name"], "label": TOOL_LABELS.get(entry["name"], "Working")}
 
     state["finish_reason"] = finish_reason
@@ -695,20 +708,40 @@ def stream_agent_turn(session, user_message_text: str):
 
     for _ in range(MAX_TOOL_ITERATIONS):
         round_state: dict = {}
-        try:
-            yield from _consume_stream_round(client, model, messages, round_state)
-        except Exception as exc:  # noqa: BLE001 — any LLM/network/response-parsing failure (including our own stall timeout) must degrade to the fixed message, never invent a reply or crash
+        round_failed = None
+        for attempt in range(LLM_ROUND_RETRIES + 1):
+            round_state = {}
+            try:
+                yield from _consume_stream_round(client, model, messages, round_state)
+                round_failed = None
+                break
+            except Exception as exc:  # noqa: BLE001 — any LLM/network/response-parsing failure (including our own stall timeout) must degrade to a fixed message, never invent a reply or crash
+                round_failed = exc
+                # Retry only while nothing has reached the client; replaying a
+                # round after events were sent would duplicate them.
+                if attempt < LLM_ROUND_RETRIES and not round_state.get("emitted_any"):
+                    audit_service.log_event(
+                        action="LLM_ROUND_RETRIED",
+                        session_id=session.id,
+                        buyer_clerk_user_id=buyer_id,
+                        metadata={"error": str(exc)[:300], "attempt": attempt + 1},
+                        commit=False,
+                    )
+                    continue
+                break
+
+        if round_failed is not None:
             audit_service.log_event(
                 action="TOOL_FAILURE",
                 session_id=session.id,
                 buyer_clerk_user_id=buyer_id,
-                metadata={"error": str(exc)},
+                metadata={"error": str(round_failed)},
             )
             if round_state.get("streamed_text"):
                 # Clear the half-written reply so the fixed message replaces it
                 # rather than appending to a truncated sentence.
                 yield {"type": "retract"}
-            yield from _emit_final(session, FIXED_SEARCH_FAILURE_MESSAGE, collected_cards, [])
+            yield from _emit_final(session, FIXED_LLM_FAILURE_MESSAGE, collected_cards, [])
             return
 
         tool_calls = round_state.get("tool_calls") or {}
