@@ -28,9 +28,9 @@ class Config:
     MERCHANT_AGENT_API_KEY = os.getenv("MERCHANT_AGENT_API_KEY", "")
 
     # LLM — any OpenAI-compatible chat completions endpoint
-    LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://router.bynara.id/v1")
+    LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.bluesminds.com/v1")
     LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-    LLM_MODEL = os.getenv("LLM_MODEL", "minimax-m3-free")
+    LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 
     # CORS
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3100")
