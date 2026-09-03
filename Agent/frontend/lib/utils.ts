@@ -30,3 +30,9 @@ export function groupByRecency<T>(items: T[], getDate: (item: T) => string): [st
 
   return Object.entries(buckets).filter(([, items]) => items.length > 0);
 }
+
+/** Shared so order/audit views don't each re-implement it. */
+export function formatDateTime(value: string | null | undefined) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString();
+}

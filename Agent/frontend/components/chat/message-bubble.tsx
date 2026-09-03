@@ -6,8 +6,9 @@ import { AgentActivity } from "@/components/chat/agent-activity";
 import { MarkdownContent } from "@/components/chat/markdown-content";
 import { ProductGallery } from "@/components/chat/product-gallery";
 import { SuggestionChips } from "@/components/chat/suggestion-chips";
+import { PayPrompt } from "@/components/checkout/pay-prompt";
 import { Button } from "@/components/ui/button";
-import type { ActivityStep, ChatMessage, ProductCard } from "@/lib/types";
+import type { ActivityStep, ChatMessage, PreparedCheckout, ProductCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function AssistantAvatar() {
@@ -82,11 +83,13 @@ export function LiveAssistantBubble({
   onBuyNow,
   addingProductId,
   selectedProductIds,
+  pendingCheckout,
 }: {
   activity: ActivityStep[];
   text: string;
   cards: ProductCard[];
   suggestions: string[];
+  pendingCheckout?: PreparedCheckout | null;
   onSuggestion: (text: string) => void;
   onBuyNow: (productId: string, variantId: string) => void;
   addingProductId: string | null;
@@ -111,6 +114,7 @@ export function LiveAssistantBubble({
             selectedProductIds={selectedProductIds}
           />
         )}
+        {pendingCheckout && <PayPrompt checkout={pendingCheckout} />}
         <SuggestionChips suggestions={suggestions} onPick={onSuggestion} />
       </div>
     </div>

@@ -155,6 +155,13 @@ export interface PaymentAuthorization {
   order: Order;
 }
 
+export interface PreparedCheckout {
+  order_id: string;
+  amount: number;
+  currency: string;
+  items: OrderItem[];
+}
+
 export interface Receipt {
   order_id: string;
   items: OrderItem[];
@@ -163,6 +170,18 @@ export interface Receipt {
   payment_status: PaymentStatus;
   payment_id: string | null;
   paid_at: string | null;
+  created_at: string;
+}
+
+/** One money action from the audit trail, scoped to the signed-in buyer. */
+export interface AuditEntry {
+  id: string;
+  action: string;
+  order_id: string | null;
+  amount: number | null;
+  currency: string | null;
+  status: string | null;
+  reason: string | null;
   created_at: string;
 }
 
@@ -184,6 +203,8 @@ export type StreamEvent =
   /** Discard streamed text so far — it turned out to precede a tool call. */
   | { type: "retract" }
   | { type: "product_cards"; cards: ProductCard[] }
+  /** The agent priced an order; the buyer must still authorize payment. */
+  | { type: "checkout_ready"; order: PreparedCheckout }
   | { type: "suggestions"; items: string[] }
   | { type: "done"; message_id: string }
   | { type: "error"; message: string };

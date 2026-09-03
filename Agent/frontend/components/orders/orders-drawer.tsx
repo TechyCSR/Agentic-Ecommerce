@@ -14,7 +14,8 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { formatMoney } from "@/lib/money";
-import { useOrders } from "@/lib/queries/use-orders";
+import { MoneyTrail } from "@/components/orders/money-trail";
+import { useMoneyTrail, useOrders } from "@/lib/queries/use-orders";
 import type { Order, PaymentStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -76,6 +77,7 @@ export function OrdersDrawer() {
   // Only fetched while the panel is open — the chat page shouldn't pay for
   // an orders round trip on every load.
   const { data: orders, isLoading } = useOrders(undefined, open);
+  const { data: trail } = useMoneyTrail(open);
 
   const confirmed = (orders ?? []).filter((o) => o.status === "CONFIRMED").length;
 
@@ -111,6 +113,16 @@ export function OrdersDrawer() {
             </div>
           ) : (
             (orders ?? []).map((order) => <OrderRow key={order.id} order={order} />)
+          )}
+
+          {(trail ?? []).length > 0 && (
+            <div className="mt-6 border-t pt-4 pb-6">
+              <p className="mb-1 text-sm font-medium">Money trail</p>
+              <p className="mb-3 text-xs text-muted-foreground">
+                Every action that priced, gated or moved money — recorded server-side.
+              </p>
+              <MoneyTrail entries={trail ?? []} />
+            </div>
           )}
         </div>
       </SheetContent>

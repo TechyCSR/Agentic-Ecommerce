@@ -8,6 +8,7 @@ import { CartDrawer } from "@/components/chat/cart-drawer";
 import { OrdersDrawer } from "@/components/orders/orders-drawer";
 import { ProfileSync } from "@/components/profile-sync";
 import { DeepLinkCheckout } from "@/components/checkout/deep-link-checkout";
+import { PayPrompt } from "@/components/checkout/pay-prompt";
 import { ChatInput } from "@/components/chat/chat-input";
 import { EmptyState } from "@/components/chat/empty-state";
 import {
@@ -169,7 +170,15 @@ export default function ChatPage() {
                   onBuyNow={handleBuyNow}
                   addingProductId={addingProductId}
                   selectedProductIds={selectedProductIds}
+                  pendingCheckout={stream.pendingCheckout}
                 />
+              )}
+
+              {/* The prepared order stays payable after the turn ends. */}
+              {isThisSession && !stream.isStreaming && stream.pendingCheckout && (
+                <div className="ml-10">
+                  <PayPrompt checkout={stream.pendingCheckout} />
+                </div>
               )}
 
               {isThisSession && !stream.isStreaming && stream.error && (

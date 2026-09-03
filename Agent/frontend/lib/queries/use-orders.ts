@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useApi } from "@/lib/use-api";
-import type { Order, PaymentAuthorization, PaymentRecord, Receipt } from "@/lib/types";
+import type { AuditEntry, Order, PaymentAuthorization, PaymentRecord, Receipt } from "@/lib/types";
 
 export function useOrders(sessionId?: string, enabled = true) {
   const api = useApi();
@@ -123,5 +123,19 @@ export function useReceipt(orderId: string | undefined, enabled: boolean) {
     queryKey: ["receipt", orderId],
     queryFn: () => api.get<Receipt>(`/api/v1/orders/${orderId}/receipt`),
     enabled: !!orderId && enabled,
+  });
+}
+
+
+/** The buyer's own trail of money actions — every step that priced, gated or
+ * moved money, in order. Only fetched when the panel is open. */
+export function useMoneyTrail(enabled: boolean, orderId?: string) {
+  const api = useApi();
+
+  return useQuery({
+    queryKey: ["money-trail", orderId ?? "all"],
+    queryFn: () =>
+      api.get<AuditEntry[]>(`/api/v1/audit${orderId ? `?order_id=${orderId}` : ""}`),
+    enabled,
   });
 }

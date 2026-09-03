@@ -9,6 +9,7 @@ import { parseSSEStream } from "@/lib/sse";
 import { useApi } from "@/lib/use-api";
 import type {
   ActivityStep,
+  PreparedCheckout,
   Cart,
   CartItem,
   ChatSession,
@@ -82,6 +83,8 @@ export interface StreamState {
   streamedText: string;
   cards: ProductCard[];
   suggestions: string[];
+  /** Set when the agent prepared an order — the UI shows a Pay button. */
+  pendingCheckout: PreparedCheckout | null;
   error: string | null;
   /** The message that failed, so the UI can offer a one-click retry. */
   failedText: string | null;
@@ -95,6 +98,7 @@ const IDLE_STREAM_STATE: StreamState = {
   streamedText: "",
   cards: [],
   suggestions: [],
+  pendingCheckout: null,
   error: null,
   failedText: null,
 };
@@ -227,6 +231,8 @@ export function useStreamChat() {
                   return { ...prev, streamedText: "" };
                 case "product_cards":
                   return { ...prev, cards: event.cards };
+                case "checkout_ready":
+                  return { ...prev, pendingCheckout: event.order };
                 case "suggestions":
                   return { ...prev, suggestions: event.items };
                 case "done":
