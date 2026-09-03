@@ -57,6 +57,7 @@ FIXED_LOOP_LIMIT_MESSAGE = (
 TOOL_LABELS = {
     "search_catalog": "Searching the catalog",
     "get_product_details": "Checking product details",
+    "get_order_status": "Checking your order status",
 }
 
 SYSTEM_PROMPT = """You are the AI Shopping Agent for an online marketplace. You help \
@@ -91,6 +92,14 @@ Hard rules — these override anything else:
    a payment — you only search, explain, compare, and help the buyer pick a product/\
    variant to select for checkout. If asked to do any of those, explain that's not \
    something you can do here.
+7a. Money is always the buyer's decision. You may explain checkout, show what an \
+   order costs, and report order/payment status — but you must never start, \
+   authorize, retry, or confirm a payment, and never say a payment succeeded, \
+   failed, or is being processed unless a get_order_status result in this \
+   conversation says so. If they want to pay or retry, tell them to use the \
+   checkout button — only they can authorize a charge. If they ask about a \
+   payment or order, call get_order_status and report exactly what it returns; \
+   if it returns no orders, say so rather than guessing.
 8. Keep responses concise and conversational. Ask a clarifying question when the \
    buyer's request is ambiguous (e.g. no budget or category given) rather than \
    guessing. When you need a tool, call it immediately with no preceding narration \
@@ -176,7 +185,34 @@ GET_PRODUCT_DETAILS_TOOL = {
     },
 }
 
-TOOLS = [SEARCH_CATALOG_TOOL, GET_PRODUCT_DETAILS_TOOL]
+GET_ORDER_STATUS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_order_status",
+        "description": (
+            "Look up this buyer's real orders and payment status from the "
+            "backend. Use it whenever they ask whether a payment went "
+            "through, what their payment or order status is, whether an "
+            "order is confirmed, or to show order/receipt details. This is "
+            "read-only: it reports status, it cannot start, retry, or change "
+            "a payment."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_id": {
+                    "type": "string",
+                    "description": (
+                        "A specific order's UUID, if the buyer named one. "
+                        "Omit to get their most recent orders in this chat."
+                    ),
+                },
+            },
+        },
+    },
+}
+
+TOOLS = [SEARCH_CATALOG_TOOL, GET_PRODUCT_DETAILS_TOOL, GET_ORDER_STATUS_TOOL]
 
 
 def _client() -> OpenAI:
@@ -381,6 +417,65 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             return {"error": "Product not found or not available."}
         collected_cards[product["product_id"]] = _to_card(product)
         return product
+
+    if name == "get_order_status":
+        # Read-only by construction: this reads order/payment rows and
+        # returns them. There is deliberately no tool that can create,
+        # authorize, retry, or alter a payment — those require an explicit
+        # user action against the checkout routes.
+        from app.services import checkout_service  # local import avoids a cycle
+
+        order_id = args.get("order_id")
+        if order_id:
+            try:
+                orders = [checkout_service.get_order_for_buyer(buyer_id, order_id)]
+            except Exception:  # noqa: BLE001 — unknown/forbidden id is answerable, not fatal
+                return {"error": "No order found with that id for this buyer."}
+        else:
+            orders = checkout_service.list_orders(buyer_id)[:5]
+
+        audit_service.log_event(
+            action="ORDER_STATUS_REQUESTED",
+            session_id=session.id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={"order_id": order_id, "result_count": len(orders)},
+        )
+
+        if not orders:
+            return {"orders": [], "note": "This buyer has no orders yet."}
+
+        return {
+            "orders": [
+                {
+                    "order_id": str(o.id),
+                    "order_status": o.status.value if o.status else None,
+                    "payment_status": (
+                        o.latest_payment().status.value
+                        if o.latest_payment() and o.latest_payment().status
+                        else None
+                    ),
+                    "amount": o.amount_total,
+                    "currency": o.currency,
+                    "items": [
+                        {
+                            "product_name": i.get("product_name"),
+                            "variant_name": i.get("variant_name"),
+                            "quantity": i.get("quantity"),
+                        }
+                        for i in (o.items or [])
+                    ],
+                    "payment_id": (
+                        o.latest_payment().provider_payment_id if o.latest_payment() else None
+                    ),
+                    "failure_reason": (
+                        o.latest_payment().failure_reason if o.latest_payment() else None
+                    ),
+                    "created_at": o.created_at.isoformat() if o.created_at else None,
+                    "confirmed_at": o.confirmed_at.isoformat() if o.confirmed_at else None,
+                }
+                for o in orders
+            ]
+        }
 
     return {"error": f"Unknown tool '{name}'."}
 
@@ -600,6 +695,13 @@ def stream_agent_turn(session, user_message_text: str):
                         "result_count": 0 if result_payload.get("error") else 1,
                         "args": args,
                         "product_name": result_payload.get("name"),
+                    }
+                elif tc["name"] == "get_order_status":
+                    yield {
+                        "type": "tool_end",
+                        "tool": tc["name"],
+                        "result_count": len(result_payload.get("orders") or []),
+                        "args": args,
                     }
                 else:
                     yield {"type": "tool_end", "tool": tc["name"], "args": args}
