@@ -145,3 +145,16 @@ def sync_profile():
         g.buyer_id, email, body.get("display_name")
     )
     return success(profile.to_dict())
+
+
+@bp.route("/sessions/<uuid:session_id>/truncate", methods=["POST"])
+@require_auth
+def truncate_session(session_id):
+    """Drops a message and everything after it, so an edited or regenerated
+    turn replaces the old one instead of stacking on top of it."""
+    body = request.get_json(silent=True) or {}
+    message_id = body.get("message_id")
+    if not message_id:
+        raise ValidationError("message_id is required")
+    removed = chat_service.truncate_from_message(g.buyer_id, session_id, message_id)
+    return success({"removed": removed})
