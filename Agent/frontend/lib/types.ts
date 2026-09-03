@@ -94,6 +94,78 @@ export interface Cart {
   total: Money;
 }
 
+export type OrderStatus = "CREATED" | "CONFIRMED" | "CANCELLED";
+
+export type PaymentStatus =
+  | "CREATED"
+  | "PENDING"
+  | "AUTHORIZED"
+  | "PAID"
+  | "FAILED"
+  | "CANCELLED";
+
+export interface OrderItem {
+  product_id: string;
+  variant_id: string;
+  product_name: string;
+  variant_name: string | null;
+  merchant_name: string | null;
+  image_url: string | null;
+  quantity: number;
+  unit_price: Money;
+  line_total: Money;
+}
+
+export interface PaymentRecord {
+  id: string;
+  order_id: string;
+  provider: string;
+  provider_order_id: string | null;
+  provider_payment_id: string | null;
+  amount: number;
+  currency: string;
+  status: PaymentStatus;
+  failure_reason: string | null;
+  paid_at: string | null;
+  created_at: string;
+}
+
+export interface Order {
+  id: string;
+  session_id: string | null;
+  items: OrderItem[];
+  amount_total: number;
+  currency: string;
+  total: Money;
+  status: OrderStatus;
+  payment_status: PaymentStatus | null;
+  payments?: PaymentRecord[];
+  created_at: string;
+  confirmed_at: string | null;
+}
+
+/** What the backend returns when the user explicitly authorizes payment.
+ * Contains the public key id only — never the Razorpay secret. */
+export interface PaymentAuthorization {
+  payment_id: string;
+  provider_order_id: string;
+  amount: number;
+  currency: string;
+  key_id: string;
+  order: Order;
+}
+
+export interface Receipt {
+  order_id: string;
+  items: OrderItem[];
+  total: Money;
+  order_status: OrderStatus;
+  payment_status: PaymentStatus;
+  payment_id: string | null;
+  paid_at: string | null;
+  created_at: string;
+}
+
 // SSE event shapes streamed from POST /sessions/:id/messages
 export type ToolArgs = Record<string, string | number | boolean | null>;
 

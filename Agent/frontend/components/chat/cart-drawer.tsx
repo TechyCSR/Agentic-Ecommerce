@@ -1,9 +1,13 @@
 "use client";
 
-import { Minus, Package, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { Loader2, Minus, Package, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
 import { toast } from "sonner";
+
+import { CheckoutDialog } from "@/components/checkout/checkout-dialog";
+import { useCreateCheckout } from "@/lib/queries/use-orders";
+import type { Order } from "@/lib/types";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -107,8 +111,25 @@ export function CartDrawer({ sessionId, cart }: { sessionId: string; cart: Cart 
   const items = cart?.items ?? [];
   const count = items.reduce((sum, i) => sum + i.quantity, 0);
 
+  const createCheckout = useCreateCheckout();
+  const [checkoutOrder, setCheckoutOrder] = useState<Order | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  async function handleCheckout() {
+    try {
+      // The backend re-validates every line against the live catalog and
+      // returns the authoritative amount — the client never prices anything.
+      const order = await createCheckout.mutateAsync(sessionId);
+      setSheetOpen(false);
+      setCheckoutOrder(order);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't start checkout");
+    }
+  }
+
   return (
-    <Sheet>
+    <>
+    <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
       <SheetTrigger
         render={
           <Button variant="outline" size="sm" className="relative gap-1.5">
@@ -146,15 +167,30 @@ export function CartDrawer({ sessionId, cart }: { sessionId: string; cart: Cart 
                 {cart ? formatMoney(cart.total.amount, cart.total.currency) : "—"}
               </span>
             </div>
-            <Button
-              className="w-full"
-              onClick={() => toast.success("Checkout isn't available yet — this confirms your picks for now.")}
-            >
-              Ready for checkout
+            <Button className="w-full" onClick={handleCheckout} disabled={createCheckout.isPending}>
+              {createCheckout.isPending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Checking availability…
+                </>
+              ) : (
+                "Proceed to checkout"
+              )}
             </Button>
           </SheetFooter>
         )}
       </SheetContent>
     </Sheet>
+
+    {/* Kept outside the Sheet root: nesting two dialog roots fights over
+        focus management when the sheet closes as checkout opens. */}
+    {checkoutOrder && (
+      <CheckoutDialog
+        order={checkoutOrder}
+        open={!!checkoutOrder}
+        onOpenChange={(open) => !open && setCheckoutOrder(null)}
+      />
+    )}
+    </>
   );
 }
