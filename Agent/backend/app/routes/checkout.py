@@ -91,3 +91,66 @@ def resync_order(order_id):
     order = checkout_service.get_order_for_buyer(g.buyer_id, order_id)
     synced = checkout_service.sync_order_to_merchant(order)
     return success({"synced": synced, "order": order.to_dict()})
+
+
+# Actions that move money or change what a buyer owes. Kept explicit rather
+# than dumping the whole audit table: the point is to show that every money
+# action is attributable, bounded and gated.
+MONEY_TRAIL_ACTIONS = [
+    "CHECKOUT_STARTED",
+    "PRODUCT_VALIDATED",
+    "PRICE_VALIDATED",
+    "ORDER_CREATED",
+    "CHECKOUT_REJECTED",
+    "USER_PAYMENT_AUTHORIZED",
+    "RAZORPAY_ORDER_CREATED",
+    "PAYMENT_ATTEMPTED",
+    "PAYMENT_VERIFIED",
+    "PAYMENT_FAILED",
+    "PAYMENT_CANCELLED",
+    "PAYMENT_RETRY_REQUESTED",
+    "PAYMENT_WEBHOOK_RECEIVED",
+    "ORDER_CONFIRMED",
+    "RECEIPT_GENERATED",
+    "MERCHANT_SYNC_SUCCEEDED",
+    "MERCHANT_SYNC_FAILED",
+]
+
+
+@bp.route("/audit", methods=["GET"])
+@require_auth
+def money_trail():
+    """The buyer's own audit trail of money actions.
+
+    Scoped to the caller: an audit row is only returned when its metadata
+    carries this buyer's id, so one account can never read another's trail.
+    """
+    from app.models import AuditEvent
+
+    limit = min(int(request.args.get("limit") or 50), 200)
+    order_id = request.args.get("order_id")
+
+    query = AuditEvent.query.filter(
+        AuditEvent.action.in_(MONEY_TRAIL_ACTIONS),
+        AuditEvent.metadata_json["buyer_clerk_user_id"].astext == g.buyer_id,
+    )
+    if order_id:
+        query = query.filter(AuditEvent.metadata_json["order_id"].astext == order_id)
+
+    events = query.order_by(AuditEvent.created_at.desc()).limit(limit).all()
+    return success(
+        [
+            {
+                "id": str(e.id),
+                "action": e.action,
+                "order_id": (e.metadata_json or {}).get("order_id"),
+                "amount": (e.metadata_json or {}).get("amount"),
+                "currency": (e.metadata_json or {}).get("currency"),
+                "status": (e.metadata_json or {}).get("status"),
+                "reason": (e.metadata_json or {}).get("reason")
+                or (e.metadata_json or {}).get("error"),
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in events
+        ]
+    )
