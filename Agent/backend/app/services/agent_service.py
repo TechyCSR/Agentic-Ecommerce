@@ -209,6 +209,10 @@ def _to_card(product: dict) -> dict:
         "category": product.get("category"),
         "description": product.get("description"),
         "image_url": primary_image,
+        # Full list (primary first) so the UI can show a real image gallery
+        # without a second round-trip for the same product.
+        "images": ([primary_image] if primary_image else [])
+        + [i["url"] for i in images if i.get("url") and i.get("url") != primary_image],
         "merchant_name": (product.get("merchant") or {}).get("name"),
         "store_name": (product.get("store") or {}).get("name"),
         "price": cheapest["price"] if cheapest else None,
@@ -517,6 +521,10 @@ def stream_agent_turn(session, user_message_text: str):
     collected_cards: dict[str, dict] = {}
     had_search = had_zero_results = had_details = False
 
+    # A real state, not a decorative one: the turn genuinely is waiting on
+    # the model to decide what to do before any tool call exists to report.
+    yield {"type": "thinking"}
+
     for _ in range(MAX_TOOL_ITERATIONS):
         round_state: dict = {}
         try:
@@ -578,16 +586,23 @@ def stream_agent_turn(session, user_message_text: str):
                     results = result_payload.get("results") or []
                     if not results:
                         had_zero_results = True
-                    yield {"type": "tool_end", "tool": tc["name"], "result_count": len(results)}
+                    yield {
+                        "type": "tool_end",
+                        "tool": tc["name"],
+                        "result_count": len(results),
+                        "args": args,
+                    }
                 elif tc["name"] == "get_product_details":
                     had_details = True
                     yield {
                         "type": "tool_end",
                         "tool": tc["name"],
                         "result_count": 0 if result_payload.get("error") else 1,
+                        "args": args,
+                        "product_name": result_payload.get("name"),
                     }
                 else:
-                    yield {"type": "tool_end", "tool": tc["name"]}
+                    yield {"type": "tool_end", "tool": tc["name"], "args": args}
             except catalog_client.CatalogError as exc:
                 tool_failed = True
                 audit_service.log_event(
