@@ -4,7 +4,12 @@ const isPublicRoute = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
 
 export default clerkMiddleware(async (auth, req) => {
   if (!isPublicRoute(req)) {
-    await auth.protect();
+    // Send signed-out visitors to sign-in. Without unauthenticatedUrl,
+    // auth.protect() answers a bare 404 on non-API routes, so the landing
+    // page looked broken to anyone not already signed in.
+    await auth.protect({
+      unauthenticatedUrl: new URL("/sign-in", req.url).toString(),
+    });
   }
 });
 
