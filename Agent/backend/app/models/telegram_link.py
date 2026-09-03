@@ -1,4 +1,4 @@
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.extensions import db
 from app.models.base import TimestampMixin, UUIDPrimaryKeyMixin
@@ -33,6 +33,12 @@ class TelegramLink(TimestampMixin, UUIDPrimaryKeyMixin, db.Model):
     session_id = db.Column(
         UUID(as_uuid=True), db.ForeignKey("chat_sessions.id"), nullable=True
     )
+
+    # The last products and suggestions shown to this user. Telegram caps
+    # callback_data at 64 bytes — two UUIDs need 77 — so buttons carry a
+    # small index and the real ids are resolved from here, server-side.
+    last_cards = db.Column(JSONB, nullable=True)
+    last_suggestions = db.Column(JSONB, nullable=True)
 
     @property
     def is_linked(self) -> bool:
