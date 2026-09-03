@@ -264,6 +264,12 @@ export function useStreamChat() {
         // bubble for the real MessageBubble with no gap between them.
         await queryClient.invalidateQueries({ queryKey: ["chat-session", sessionId] });
         queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+        // The agent can change the cart, addresses and orders through its own
+        // tools, so the panels that show them must refresh — otherwise the
+        // cart badge stays stale after "add it to my cart".
+        queryClient.invalidateQueries({ queryKey: ["chat-cart"] });
+        queryClient.invalidateQueries({ queryKey: ["orders"] });
+        queryClient.invalidateQueries({ queryKey: ["addresses"] });
 
         // pendingUserText clears only here: the refetched session now
         // contains the real persisted user message, so dropping the

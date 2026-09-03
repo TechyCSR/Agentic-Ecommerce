@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowUp, Square } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,12 +10,25 @@ export function ChatInput({
   onSend,
   isStreaming,
   onStop,
+  draft,
 }: {
   onSend: (text: string) => Promise<boolean>;
   isStreaming?: boolean;
   onStop?: () => void;
+  /** Text loaded into the composer, e.g. from "edit & resend". The nonce
+   * makes re-editing the same message work — the text alone wouldn't change. */
+  draft?: { text: string; nonce: number } | null;
 }) {
   const [value, setValue] = useState("");
+  const [adoptedNonce, setAdoptedNonce] = useState<number | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Adjust during render rather than in an effect (this project disallows
+  // setState inside effects), guarded so it runs once per Edit click.
+  if (draft && draft.nonce !== adoptedNonce) {
+    setAdoptedNonce(draft.nonce);
+    setValue(draft.text);
+  }
 
   async function handleSend() {
     const text = value.trim();
@@ -32,7 +45,9 @@ export function ChatInput({
     <div className="bg-gradient-to-t from-background via-background to-transparent px-3 pb-3 md:px-6 md:pb-4">
       <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[1.75rem] border bg-card/80 p-1.5 pl-4 shadow-lg backdrop-blur-md transition-all duration-200 focus-within:border-foreground/25 focus-within:shadow-xl">
         <Textarea
+          ref={textareaRef}
           value={value}
+          autoFocus={adoptedNonce !== null}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {

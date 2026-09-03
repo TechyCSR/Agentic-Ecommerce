@@ -46,6 +46,7 @@ export default function ChatPage() {
   const addToCart = useAddToCart();
 
   const [addingProductId, setAddingProductId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{ text: string; nonce: number } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -153,6 +154,23 @@ export default function ChatPage() {
                     message.id === lastMessage?.id && showPersistedSuggestions ? handleSend : undefined
                   }
                   suggestionsDisabled={stream.isStreaming}
+                  onEdit={
+                    message.role === "user"
+                      ? () => setDraft({ text: message.content, nonce: Date.now() })
+                      : undefined
+                  }
+                  onRetry={
+                    // Regenerating re-sends the question this reply answered.
+                    message.role === "assistant"
+                      ? () => {
+                          const asked = [...messages]
+                            .slice(0, messages.indexOf(message))
+                            .reverse()
+                            .find((m) => m.role === "user");
+                          if (asked) handleSend(asked.content);
+                        }
+                      : undefined
+                  }
                 />
               ))}
 
@@ -188,7 +206,12 @@ export default function ChatPage() {
           )}
         </div>
 
-        <ChatInput onSend={handleSend} isStreaming={stream.isStreaming} onStop={stop} />
+        <ChatInput
+          onSend={handleSend}
+          isStreaming={stream.isStreaming}
+          onStop={stop}
+          draft={draft}
+        />
       </div>
     </div>
   );

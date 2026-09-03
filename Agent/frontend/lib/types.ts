@@ -59,6 +59,8 @@ export interface ChatMessage {
   suggested_replies: string[] | null;
   /** A priced order this turn prepared — renders a Pay button. */
   prepared_checkout: PreparedCheckout | null;
+  /** What the agent did this turn, so the trace can be reopened later. */
+  tool_activity: ActivityStep[] | null;
   created_at: string;
 }
 

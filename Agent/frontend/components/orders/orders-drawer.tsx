@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Clock, Package, Receipt, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, Package, Receipt, ScrollText, XCircle } from "lucide-react";
 import { useState } from "react";
 
 import { ProductImage } from "@/components/chat/product-image";
@@ -74,10 +74,11 @@ function OrderRow({ order }: { order: Order }) {
 
 export function OrdersDrawer() {
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<"orders" | "trail">("orders");
   // Only fetched while the panel is open — the chat page shouldn't pay for
   // an orders round trip on every load.
   const { data: orders, isLoading } = useOrders(undefined, open);
-  const { data: trail } = useMoneyTrail(open);
+  const { data: trail } = useMoneyTrail(open && tab === "trail");
 
   const confirmed = (orders ?? []).filter((o) => o.status === "CONFIRMED").length;
 
@@ -101,8 +102,37 @@ export function OrdersDrawer() {
           <SheetTitle>Your orders</SheetTitle>
         </SheetHeader>
 
+        {/* One panel, two views: what you bought, and the money actions
+            behind it. Keeping them together avoids a second entry point for
+            something most people only want occasionally. */}
+        <div className="flex gap-1 border-b px-4 pb-3">
+          {(["orders", "trail"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                tab === t
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {t === "orders" ? <Package className="size-3.5" /> : <ScrollText className="size-3.5" />}
+              {t === "orders" ? "Orders" : "Money trail"}
+            </button>
+          ))}
+        </div>
+
         <div className="flex-1 overflow-y-auto px-4">
-          {isLoading ? (
+          {tab === "trail" ? (
+            <div className="py-3">
+              <p className="mb-3 text-xs text-muted-foreground">
+                Every action that priced, gated or moved money — recorded server-side.
+              </p>
+              <MoneyTrail entries={trail ?? []} />
+            </div>
+          ) : isLoading ? (
             <div className="flex h-full items-center justify-center py-16">
               <Package className="size-6 animate-pulse text-muted-foreground" />
             </div>
@@ -113,16 +143,6 @@ export function OrdersDrawer() {
             </div>
           ) : (
             (orders ?? []).map((order) => <OrderRow key={order.id} order={order} />)
-          )}
-
-          {(trail ?? []).length > 0 && (
-            <div className="mt-6 border-t pt-4 pb-6">
-              <p className="mb-1 text-sm font-medium">Money trail</p>
-              <p className="mb-3 text-xs text-muted-foreground">
-                Every action that priced, gated or moved money — recorded server-side.
-              </p>
-              <MoneyTrail entries={trail ?? []} />
-            </div>
           )}
         </div>
       </SheetContent>

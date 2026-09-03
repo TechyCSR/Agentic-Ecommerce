@@ -6,6 +6,7 @@ import { AgentActivity } from "@/components/chat/agent-activity";
 import { MarkdownContent } from "@/components/chat/markdown-content";
 import { ProductGallery } from "@/components/chat/product-gallery";
 import { SuggestionChips } from "@/components/chat/suggestion-chips";
+import { MessageActions } from "@/components/chat/message-actions";
 import { PayPrompt } from "@/components/checkout/pay-prompt";
 import { Button } from "@/components/ui/button";
 import type { ActivityStep, ChatMessage, PreparedCheckout, ProductCard } from "@/lib/types";
@@ -34,12 +35,28 @@ function AssistantAvatar() {
   );
 }
 
-export function UserMessage({ content }: { content: string }) {
+export function UserMessage({
+  content,
+  createdAt,
+  onEdit,
+}: {
+  content: string;
+  createdAt?: string;
+  onEdit?: () => void;
+}) {
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-2 flex justify-end duration-300">
+    <div className="group animate-in fade-in slide-in-from-bottom-2 flex flex-col items-end gap-1 duration-300">
       <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm whitespace-pre-wrap text-primary-foreground shadow-sm">
         {content}
       </div>
+      {createdAt && (
+        <MessageActions
+          createdAt={createdAt}
+          content={content}
+          align="right"
+          onEdit={onEdit}
+        />
+      )}
     </div>
   );
 }
@@ -51,6 +68,8 @@ export function MessageBubble({
   selectedProductIds,
   onSuggestion,
   suggestionsDisabled,
+  onRetry,
+  onEdit,
 }: {
   message: ChatMessage;
   onBuyNow: (productId: string, variantId: string) => void;
@@ -58,11 +77,21 @@ export function MessageBubble({
   selectedProductIds?: Set<string>;
   onSuggestion?: (text: string) => void;
   suggestionsDisabled?: boolean;
+  onRetry?: () => void;
+  onEdit?: () => void;
 }) {
-  if (message.role === "user") return <UserMessage content={message.content} />;
+  if (message.role === "user") {
+    return (
+      <UserMessage
+        content={message.content}
+        createdAt={message.created_at}
+        onEdit={onEdit}
+      />
+    );
+  }
 
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-2 flex gap-3 duration-300">
+    <div className="group animate-in fade-in slide-in-from-bottom-2 flex gap-3 duration-300">
       <AssistantAvatar />
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         <MarkdownContent content={message.content} />
@@ -82,6 +111,12 @@ export function MessageBubble({
             disabled={suggestionsDisabled}
           />
         )}
+        <MessageActions
+          createdAt={message.created_at}
+          content={message.content}
+          onRetry={onRetry}
+          activity={message.tool_activity}
+        />
       </div>
     </div>
   );
