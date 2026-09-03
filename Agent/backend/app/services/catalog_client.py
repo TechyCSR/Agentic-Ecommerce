@@ -8,6 +8,12 @@ import requests
 from flask import current_app
 
 
+# Merchant search measures 6.5-7.7s in production (the app and its database
+# sit in different regions), so 10s left almost no headroom before a
+# legitimate query looked like an outage to the buyer.
+REQUEST_TIMEOUT = 25
+
+
 class CatalogError(Exception):
     """Raised when the Merchant agent API can't be reached or errors."""
 
@@ -60,7 +66,7 @@ def search_catalog(
             f"{_base_url()}/api/v1/agent/catalog/search",
             headers=_headers(),
             params=params,
-            timeout=10,
+            timeout=REQUEST_TIMEOUT,
         )
     except requests.RequestException as exc:
         raise CatalogError(f"Catalog search request failed: {exc}") from exc
@@ -82,7 +88,7 @@ def get_product(product_id: str):
         resp = requests.get(
             f"{_base_url()}/api/v1/agent/products/{product_id}",
             headers=_headers(),
-            timeout=10,
+            timeout=REQUEST_TIMEOUT,
         )
     except requests.RequestException as exc:
         raise CatalogError(f"Product lookup request failed: {exc}") from exc
@@ -111,7 +117,7 @@ def create_order(payload: dict) -> dict:
             f"{_base_url()}/api/v1/agent/orders",
             headers={**_headers(), "Content-Type": "application/json"},
             json=payload,
-            timeout=15,
+            timeout=REQUEST_TIMEOUT,
         )
     except requests.RequestException as exc:
         raise MerchantSyncError(f"Order sync request failed: {exc}") from exc
@@ -135,7 +141,7 @@ def get_merchant_order(agent_order_id: str):
         resp = requests.get(
             f"{_base_url()}/api/v1/agent/orders/{agent_order_id}",
             headers=_headers(),
-            timeout=10,
+            timeout=REQUEST_TIMEOUT,
         )
     except requests.RequestException as exc:
         raise MerchantSyncError(f"Order lookup request failed: {exc}") from exc
