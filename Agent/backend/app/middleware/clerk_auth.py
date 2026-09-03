@@ -24,6 +24,8 @@ def require_auth(fn):
 
         claims = verify_session_token(token)
         g.buyer_id = claims["sub"]
+        # Kept so routes can prefer a Clerk-attested email over a client-sent one.
+        g.claims = claims
         return fn(*args, **kwargs)
 
     return wrapper

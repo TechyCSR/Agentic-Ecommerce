@@ -122,3 +122,26 @@ def remove_cart_item(session_id, selection_id):
 def get_cart(session_id):
     cart = selection_service.get_cart(g.buyer_id, session_id)
     return success(cart)
+
+
+@bp.route("/me", methods=["POST"])
+@require_auth
+def sync_profile():
+    """Records the signed-in buyer's email so other channels can find them.
+
+    The Clerk id comes from the verified JWT; the email is taken from the
+    token's claims when Clerk includes them, and otherwise from the signed-in
+    web app. An email already registered to a different Clerk id is refused,
+    so one account cannot claim another's address and intercept its
+    Telegram `/login`.
+    """
+    body = request.get_json(silent=True) or {}
+    claims = getattr(g, "claims", {}) or {}
+    email = (claims.get("email") or body.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise ValidationError("A valid email is required")
+
+    profile = chat_service.upsert_buyer_profile(
+        g.buyer_id, email, body.get("display_name")
+    )
+    return success(profile.to_dict())

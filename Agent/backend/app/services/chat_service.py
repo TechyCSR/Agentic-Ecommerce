@@ -46,3 +46,32 @@ def delete_session(buyer_id: str, session_id: str) -> None:
     session = get_session_for_buyer(buyer_id, session_id)
     db.session.delete(session)
     db.session.commit()
+
+
+def upsert_buyer_profile(buyer_id: str, email: str, display_name=None):
+    """Keeps one email per buyer, and one buyer per email."""
+    from app.models import BuyerProfile
+    from app.utils.exceptions import ValidationError
+
+    email = email.strip().lower()
+
+    taken = BuyerProfile.query.filter(
+        db.func.lower(BuyerProfile.email) == email,
+        BuyerProfile.clerk_user_id != buyer_id,
+    ).first()
+    if taken is not None:
+        raise ValidationError(
+            "That email is already linked to a different account.",
+            code="EMAIL_ALREADY_LINKED",
+        )
+
+    profile = BuyerProfile.query.filter_by(clerk_user_id=buyer_id).first()
+    if profile is None:
+        profile = BuyerProfile(clerk_user_id=buyer_id, email=email, display_name=display_name)
+        db.session.add(profile)
+    else:
+        profile.email = email
+        if display_name:
+            profile.display_name = display_name
+    db.session.commit()
+    return profile
