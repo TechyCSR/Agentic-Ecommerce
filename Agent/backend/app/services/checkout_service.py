@@ -117,6 +117,35 @@ def _validate_line(buyer_id: str, session_id, item: SelectedProduct) -> dict:
     }
 
 
+def find_reusable_order(buyer_id: str, session_id, cart_items) -> Order | None:
+    """An unpaid order for this exact cart that can be offered again.
+
+    Asking to check out twice should re-surface the same Pay button, not
+    stack up duplicate orders the buyer then has to reason about.
+    """
+    candidates = (
+        Order.query.filter_by(
+            buyer_clerk_user_id=buyer_id, session_id=session_id, status=OrderStatus.CREATED
+        )
+        .order_by(Order.created_at.desc())
+        .limit(3)
+        .all()
+    )
+    wanted = sorted(
+        (str(i.product_id), str(i.variant_id), int(i.quantity or 1)) for i in cart_items
+    )
+    for order in candidates:
+        if any(p.status == PaymentStatus.PAID for p in order.payments):
+            continue
+        have = sorted(
+            (str(i.get("product_id")), str(i.get("variant_id")), int(i.get("quantity") or 1))
+            for i in (order.items or [])
+        )
+        if have == wanted:
+            return order
+    return None
+
+
 def create_checkout(buyer_id: str, session_id) -> Order:
     session = chat_service.get_session_for_buyer(buyer_id, session_id)
 
@@ -127,6 +156,17 @@ def create_checkout(buyer_id: str, session_id) -> Order:
     )
     if not cart_items:
         raise ValidationError("Your cart is empty.", code="CART_EMPTY")
+
+    reusable = find_reusable_order(buyer_id, session.id, cart_items)
+    if reusable is not None:
+        audit_service.log_event(
+            action="CHECKOUT_REUSED",
+            resource_id=reusable.id,
+            session_id=session.id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={"order_id": str(reusable.id), "amount": reusable.amount_total},
+        )
+        return reusable
 
     audit_service.log_event(
         action="CHECKOUT_STARTED",
@@ -222,11 +262,25 @@ def get_order_for_buyer(buyer_id: str, order_id) -> Order:
     return order
 
 
-def list_orders(buyer_id: str, session_id=None) -> list[Order]:
+def list_orders(buyer_id: str, session_id=None, include_unattempted=False) -> list[Order]:
+    """The buyer's orders, newest first.
+
+    By default this hides orders that were priced but never paid and never
+    even attempted — abandoned checkouts. They are noise in "my orders", and
+    a live one is already on screen as a Pay button. Anything paid,
+    refunded, cancelled, or with a real payment attempt always shows.
+    """
     query = Order.query.filter_by(buyer_clerk_user_id=buyer_id)
     if session_id is not None:
         query = query.filter_by(session_id=session_id)
-    return query.order_by(Order.created_at.desc()).all()
+    orders = query.order_by(Order.created_at.desc()).all()
+
+    if include_unattempted:
+        return orders
+    return [
+        o for o in orders
+        if o.status != OrderStatus.CREATED or o.payments
+    ]
 
 
 def build_receipt(buyer_id: str, order: Order) -> dict:

@@ -21,7 +21,12 @@ def create_checkout(session_id):
 @require_auth
 def list_orders():
     session_id = request.args.get("session_id")
-    orders = checkout_service.list_orders(g.buyer_id, session_id)
+    # Abandoned, never-attempted checkouts are hidden by default; ?all=1
+    # surfaces them for debugging or a full history view.
+    include_unattempted = request.args.get("all") in ("1", "true")
+    orders = checkout_service.list_orders(
+        g.buyer_id, session_id, include_unattempted=include_unattempted
+    )
     return success([o.to_dict() for o in orders])
 
 
