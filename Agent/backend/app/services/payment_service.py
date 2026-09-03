@@ -449,12 +449,22 @@ def refund_payment(order, payment, reason: str = None):
              "notes": {"order_id": str(order.id), "reason": reason or "buyer_cancelled"}},
         )
     except Exception as exc:  # noqa: BLE001 — a failed refund must be recorded, not raised at the buyer
+        # Some provider exceptions stringify to nothing, which made the audit
+        # row useless; keep the type and repr so a failure stays diagnosable.
+        detail = str(exc) or repr(exc)
         audit_service.log_event(
             action="REFUND_FAILED",
             resource_id=order.id,
             session_id=order.session_id,
             buyer_clerk_user_id=order.buyer_clerk_user_id,
-            metadata={"order_id": str(order.id), "error": str(exc)[:400]},
+            metadata={
+                "order_id": str(order.id),
+                "payment_id": str(payment.id),
+                "provider_payment_id": payment.provider_payment_id,
+                "amount": payment.amount,
+                "error_type": type(exc).__name__,
+                "error": detail[:400],
+            },
         )
         return False, (
             "Your order is cancelled, but the refund couldn't be started "

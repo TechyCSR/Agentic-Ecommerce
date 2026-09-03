@@ -412,7 +412,10 @@ def cancel_order(buyer_id: str, order) -> tuple[bool, str]:
         return True, "Your order is cancelled. Nothing was charged."
 
     refunded, message = payment_service.refund_payment(order, payment, "buyer_cancelled")
-    return True, f"Your order is cancelled. {message}"
+    if refunded:
+        return True, f"Your order is cancelled. {message}"
+    # The refund helper's failure text already explains the cancellation.
+    return True, message
 
 
 def reorder_into_cart(buyer_id: str, order, session_id) -> tuple[int, list]:
