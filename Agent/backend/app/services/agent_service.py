@@ -1,15 +1,32 @@
-"""The LLM tool-calling loop that powers the shopping chat.
+"""The LLM tool-calling loop that powers the shopping chat — streamed.
 
 Talks to any OpenAI-compatible chat completions endpoint (configured via
-LLM_BASE_URL/LLM_API_KEY/LLM_MODEL — currently NaraRouter's gateway,
-model minimax-m3-free). Manual loop, not a framework's agent runner, so
+LLM_BASE_URL/LLM_API_KEY/LLM_MODEL — currently api.bluesminds.com,
+model gpt-4o). Manual loop, not a framework's agent runner, so
 every tool call can be audit-logged and its raw JSON kept for
 product-card extraction — cards are built only from tool results, never
 parsed from the model's prose, so the agent cannot present a product it
 didn't actually look up.
+
+`stream_agent_turn` is a generator yielding small SSE-ready event dicts as
+the turn progresses (tool_start/tool_end/token/product_cards/suggestions/
+done) instead of blocking until the whole reply is ready — see
+`app/routes/chat.py` for how these get framed onto the wire.
+
+Confirmed live against a prior provider (NaraRouter, not assumed from
+docs — the defenses below are kept because they're provider-agnostic,
+not because this specific provider is known to need them): on a
+tool-calling round a model can stream a few words of narration ("Here
+are some mechanical keyboards...") *before* the tool_calls delta
+arrives. That text isn't grounded in any tool result yet, so it is
+deliberately buffered and discarded the moment a tool call starts —
+never sent to the client — rather than trusting the "don't narrate"
+system-prompt rule to hold on its own.
 """
 
 import json
+import queue
+import threading
 
 from flask import current_app
 from openai import OpenAI
@@ -20,11 +37,12 @@ from app.models.enums import MessageRole
 from app.services import audit_service, catalog_client
 
 MAX_TOOL_ITERATIONS = 6
-# Kept tight on purpose: this is a synchronous request/response chat, not a
-# streaming one, so a slow upstream directly stalls the buyer's browser.
-# One retry (not the SDK's default of two) trades a little resilience
-# against a transient blip for staying well inside gunicorn's worker
-# timeout even in the worst case (a few tool-calling iterations deep).
+# Kept tight on purpose: a slow upstream directly stalls the buyer's
+# browser. One retry (not the SDK's default of two) trades a little
+# resilience against a transient blip for staying well inside gunicorn's
+# worker timeout even in the worst case (a few tool-calling iterations
+# deep) — see the deploy notes for how the worst case (MAX_TOOL_ITERATIONS
+# x REQUEST_TIMEOUT_SECONDS) sizes the gunicorn/nginx timeouts.
 REQUEST_TIMEOUT_SECONDS = 20
 LLM_MAX_RETRIES = 1
 
@@ -35,6 +53,11 @@ FIXED_LOOP_LIMIT_MESSAGE = (
     "I'm having trouble narrowing this down. Could you tell me a bit more "
     "about what you're looking for?"
 )
+
+TOOL_LABELS = {
+    "search_catalog": "Searching the catalog",
+    "get_product_details": "Checking product details",
+}
 
 SYSTEM_PROMPT = """You are the AI Shopping Agent for an online marketplace. You help \
 buyers search, understand, compare, and select real products from the live catalog.
@@ -70,7 +93,9 @@ Hard rules — these override anything else:
    something you can do here.
 8. Keep responses concise and conversational. Ask a clarifying question when the \
    buyer's request is ambiguous (e.g. no budget or category given) rather than \
-   guessing. Don't narrate that you're using a tool — just use it and answer.
+   guessing. When you need a tool, call it immediately with no preceding narration \
+   text ("Let me check...", "Here are some...") — go straight to the tool call and \
+   only write prose once you have real results to report.
 """
 
 SEARCH_CATALOG_TOOL = {
@@ -256,12 +281,37 @@ def _detect_comparison_intent(text: str) -> bool:
     return any(kw in lowered for kw in ("compare", " vs ", " vs.", "versus", "difference between"))
 
 
-def _persist_assistant_reply(session, text: str, cards: list[dict]):
+def _build_suggestions(
+    *, cards, had_search, had_zero_results, had_details, comparison_intent, is_first_turn
+) -> list[str]:
+    """Deterministic, template-derived follow-ups — never model-generated, so
+    they carry the same no-hallucination guarantee as product cards, and
+    cost no extra LLM round-trip (which would hurt the exact latency this
+    streaming rework is meant to fix)."""
+    if had_zero_results:
+        return ["Try a different category", "Increase the budget", "Search a different brand"]
+    if comparison_intent and len(cards) >= 2:
+        return ["Which one has better value?", "Show only in-stock options", "Add the cheaper one to cart"]
+    if len(cards) >= 2:
+        return ["Compare these", "Show cheaper options", "Add the first one to cart"]
+    if len(cards) == 1:
+        return ["Add to cart", "Show similar products", "Any other variants?"]
+    if had_details:
+        return ["Compare with something else", "Show similar products"]
+    if had_search:
+        return ["Refine my search", "Show more options"]
+    if is_first_turn:
+        return ["Show trending products", "Search by category", "Search under a budget"]
+    return ["Search something else"]
+
+
+def _persist_assistant_reply(session, text: str, cards: list[dict], suggestions: list[str] | None):
     message = ChatMessage(
         session_id=session.id,
         role=MessageRole.ASSISTANT,
         content=text,
         product_cards=cards or None,
+        suggested_replies=suggestions or None,
     )
     db.session.add(message)
     if not session.title:
@@ -331,8 +381,112 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
     return {"error": f"Unknown tool '{name}'."}
 
 
-def run_agent_turn(session, user_message_text: str) -> ChatMessage:
+def _produce_stream(client, model, messages, q: "queue.Queue"):
+    """Runs on a background daemon thread — does the actual blocking network
+    call and pushes each chunk onto `q` as it arrives. Exists solely so the
+    consumer's `q.get(timeout=...)` can enforce a real, preemptable
+    deadline (see `_consume_stream_round`)."""
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+            temperature=0.4,
+            max_tokens=1024,
+            stream=True,
+        )
+        for chunk in response:
+            q.put(("chunk", chunk))
+        q.put(("done", None))
+    except Exception as exc:  # noqa: BLE001 — handed to the consumer thread via the queue, never raised here
+        q.put(("error", exc))
+
+
+def _consume_stream_round(client, model, messages, state: dict):
+    """Consumes one streamed completion, yielding a `tool_start` SSE event
+    the moment each tool call's name becomes known; buffers everything else
+    into `state` (finish_reason/content/tool_calls) for the caller to act
+    on once the round is fully drained — content is never yielded here, so
+    pre-tool-call narration is structurally impossible to leak to the
+    client (see module docstring).
+
+    Runs the actual SDK call on a background thread and reads its output
+    through a queue with `q.get(timeout=REQUEST_TIMEOUT_SECONDS)`, rather
+    than relying on the client's own configured timeout. Confirmed live
+    against NaraRouter: a streaming response can trickle keepalive frames
+    that keep httpx's own read-timeout clock reset indefinitely, and
+    because that block happens *inside* the SDK's iterator, a wall-clock
+    check in the consuming `for` loop can never run until a chunk is
+    already yielded — it can't preempt a stall that never yields one. A
+    queue with a timeout can: `q.get()` returns control to this generator
+    even if the background thread stays stuck, giving a real, bounded
+    "no progress for REQUEST_TIMEOUT_SECONDS" cutoff regardless of what the
+    SDK/transport is doing under the hood. Observed directly: a turn that
+    hung past 60s with the client's own 20s timeout never firing."""
+    content_parts: list[str] = []
+    tool_calls: dict[int, dict] = {}
+    finish_reason = None
+    started: set[int] = set()
+
+    q: queue.Queue = queue.Queue()
+    threading.Thread(target=_produce_stream, args=(client, model, messages, q), daemon=True).start()
+
+    while True:
+        try:
+            kind, payload = q.get(timeout=REQUEST_TIMEOUT_SECONDS)
+        except queue.Empty as exc:
+            raise TimeoutError("LLM stream produced no data within the time budget") from exc
+
+        if kind == "error":
+            raise payload
+        if kind == "done":
+            break
+
+        chunk = payload
+        if not chunk.choices:
+            continue
+        choice = chunk.choices[0]
+        delta = choice.delta
+        if choice.finish_reason:
+            finish_reason = choice.finish_reason
+        if delta and delta.content:
+            content_parts.append(delta.content)
+        if delta and delta.tool_calls:
+            for tc in delta.tool_calls:
+                entry = tool_calls.setdefault(tc.index, {"id": None, "name": None, "arguments": ""})
+                if tc.id:
+                    entry["id"] = tc.id
+                if tc.function:
+                    if tc.function.name:
+                        entry["name"] = tc.function.name
+                    if tc.function.arguments:
+                        entry["arguments"] += tc.function.arguments
+                if tc.index not in started and entry["name"]:
+                    started.add(tc.index)
+                    yield {"type": "tool_start", "tool": entry["name"], "label": TOOL_LABELS.get(entry["name"], "Working")}
+
+    state["finish_reason"] = finish_reason
+    state["content"] = "".join(content_parts)
+    state["tool_calls"] = tool_calls
+
+
+def _stream_text(text: str, chunk_size: int = 14):
+    for i in range(0, len(text or ""), chunk_size):
+        yield {"type": "token", "delta": text[i : i + chunk_size]}
+
+
+def _emit_final(session, text: str, collected_cards: dict, suggestions: list[str]):
+    message = _persist_assistant_reply(session, text, list(collected_cards.values()), suggestions)
+    yield from _stream_text(text)
+    yield {"type": "product_cards", "cards": message.product_cards or []}
+    yield {"type": "suggestions", "items": suggestions}
+    yield {"type": "done", "message_id": str(message.id)}
+
+
+def stream_agent_turn(session, user_message_text: str):
     buyer_id = session.buyer_clerk_user_id
+    is_first_turn = len(session.messages) == 0
 
     audit_service.log_event(
         action="USER_MESSAGE_RECEIVED",
@@ -340,7 +494,8 @@ def run_agent_turn(session, user_message_text: str) -> ChatMessage:
         buyer_clerk_user_id=buyer_id,
         metadata={"message": user_message_text},
     )
-    if _detect_comparison_intent(user_message_text):
+    comparison_intent = _detect_comparison_intent(user_message_text)
+    if comparison_intent:
         audit_service.log_event(
             action="PRODUCT_COMPARISON",
             session_id=session.id,
@@ -360,88 +515,100 @@ def run_agent_turn(session, user_message_text: str) -> ChatMessage:
     client = _client()
     model = current_app.config["LLM_MODEL"]
     collected_cards: dict[str, dict] = {}
+    had_search = had_zero_results = had_details = False
 
     for _ in range(MAX_TOOL_ITERATIONS):
+        round_state: dict = {}
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                temperature=0.4,
-                max_tokens=1024,
-            )
-            message = response.choices[0].message
-            tool_calls = message.tool_calls or []
-            reply_text = message.content or "" if not tool_calls else None
-        except Exception as exc:  # noqa: BLE001 — any LLM/network/response-parsing failure must degrade to the fixed message, never invent a reply or crash
+            yield from _consume_stream_round(client, model, messages, round_state)
+        except Exception as exc:  # noqa: BLE001 — any LLM/network/response-parsing failure (including our own stall timeout) must degrade to the fixed message, never invent a reply or crash
             audit_service.log_event(
                 action="TOOL_FAILURE",
                 session_id=session.id,
                 buyer_clerk_user_id=buyer_id,
                 metadata={"error": str(exc)},
             )
-            return _persist_assistant_reply(
-                session, FIXED_SEARCH_FAILURE_MESSAGE, list(collected_cards.values())
-            )
+            yield from _emit_final(session, FIXED_SEARCH_FAILURE_MESSAGE, collected_cards, [])
+            return
+
+        tool_calls = round_state.get("tool_calls") or {}
 
         if not tool_calls:
-            return _persist_assistant_reply(
-                session, reply_text, list(collected_cards.values())
+            text = round_state.get("content", "")
+            suggestions = _build_suggestions(
+                cards=list(collected_cards.values()),
+                had_search=had_search,
+                had_zero_results=had_zero_results,
+                had_details=had_details,
+                comparison_intent=comparison_intent,
+                is_first_turn=is_first_turn,
             )
+            yield from _emit_final(session, text, collected_cards, suggestions)
+            return
 
+        ordered_calls = [tool_calls[i] for i in sorted(tool_calls)]
         messages.append(
             {
                 "role": "assistant",
-                "content": message.content,
+                "content": round_state.get("content") or None,
                 "tool_calls": [
                     {
-                        "id": tc.id,
+                        "id": tc["id"],
                         "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
                     }
-                    for tc in tool_calls
+                    for tc in ordered_calls
                 ],
             }
         )
 
         tool_failed = False
-        for tc in tool_calls:
+        for tc in ordered_calls:
             try:
-                args = json.loads(tc.function.arguments or "{}")
+                args = json.loads(tc["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
 
             try:
                 result_payload = _execute_tool_call(
-                    session, buyer_id, tc.function.name, args, last_shown_cards, collected_cards
+                    session, buyer_id, tc["name"], args, last_shown_cards, collected_cards
                 )
+                if tc["name"] == "search_catalog":
+                    had_search = True
+                    results = result_payload.get("results") or []
+                    if not results:
+                        had_zero_results = True
+                    yield {"type": "tool_end", "tool": tc["name"], "result_count": len(results)}
+                elif tc["name"] == "get_product_details":
+                    had_details = True
+                    yield {
+                        "type": "tool_end",
+                        "tool": tc["name"],
+                        "result_count": 0 if result_payload.get("error") else 1,
+                    }
+                else:
+                    yield {"type": "tool_end", "tool": tc["name"]}
             except catalog_client.CatalogError as exc:
                 tool_failed = True
                 audit_service.log_event(
                     action="TOOL_FAILURE",
                     session_id=session.id,
                     buyer_clerk_user_id=buyer_id,
-                    metadata={"tool": tc.function.name, "error": str(exc)},
+                    metadata={"tool": tc["name"], "error": str(exc)},
                 )
                 result_payload = {"error": "Catalog temporarily unavailable."}
+                yield {"type": "tool_end", "tool": tc["name"], "error": True}
 
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": tc.id,
+                    "tool_call_id": tc["id"],
                     "content": json.dumps(result_payload),
                 }
             )
 
         if tool_failed:
-            return _persist_assistant_reply(
-                session, FIXED_SEARCH_FAILURE_MESSAGE, list(collected_cards.values())
-            )
+            yield from _emit_final(session, FIXED_SEARCH_FAILURE_MESSAGE, collected_cards, [])
+            return
 
-    return _persist_assistant_reply(
-        session, FIXED_LOOP_LIMIT_MESSAGE, list(collected_cards.values())
-    )
+    yield from _emit_final(session, FIXED_LOOP_LIMIT_MESSAGE, collected_cards, [])

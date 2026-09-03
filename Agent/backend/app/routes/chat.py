@@ -1,4 +1,6 @@
-from flask import Blueprint, g, request
+import json
+
+from flask import Blueprint, Response, g, request, stream_with_context
 
 from app.middleware.clerk_auth import require_auth
 from app.services import chat_service, selection_service
@@ -31,6 +33,24 @@ def get_session(session_id):
     return success(data)
 
 
+@bp.route("/sessions/<uuid:session_id>", methods=["PATCH"])
+@require_auth
+def rename_session(session_id):
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise ValidationError("title is required")
+    session = chat_service.rename_session(g.buyer_id, session_id, title)
+    return success(session.to_dict())
+
+
+@bp.route("/sessions/<uuid:session_id>", methods=["DELETE"])
+@require_auth
+def delete_session(session_id):
+    chat_service.delete_session(g.buyer_id, session_id)
+    return success(None, status=200)
+
+
 @bp.route("/sessions/<uuid:session_id>/messages", methods=["POST"])
 @require_auth
 def send_message(session_id):
@@ -39,25 +59,66 @@ def send_message(session_id):
     if not text:
         raise ValidationError("Message text is required")
 
-    reply = chat_service.send_message(g.buyer_id, session_id, text)
-    return success(reply.to_dict(), status=201)
+    # get_session_for_buyer runs eagerly here (stream_message calls it
+    # before constructing the agent_service generator), so an unknown/
+    # forbidden session still raises a normal JSON error instead of a
+    # broken stream — only genuine mid-turn failures (network, catalog,
+    # LLM) get surfaced as an `error` SSE event below.
+    events = chat_service.stream_message(g.buyer_id, session_id, text)
+
+    def generate():
+        try:
+            for event in events:
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception:  # noqa: BLE001 — headers are already committed to text/event-stream; a raised exception here must become an SSE event, never a broken connection
+            yield (
+                "data: "
+                + json.dumps({"type": "error", "message": "Something went wrong. Please try again."})
+                + "\n\n"
+            )
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 @bp.route("/sessions/<uuid:session_id>/select", methods=["POST"])
 @require_auth
-def select_product(session_id):
+def add_to_cart(session_id):
     body = request.get_json(silent=True) or {}
     product_id = body.get("product_id")
     variant_id = body.get("variant_id")
+    quantity = int(body.get("quantity") or 1)
     if not product_id or not variant_id:
         raise ValidationError("product_id and variant_id are required")
 
-    selection = selection_service.select_product(g.buyer_id, session_id, product_id, variant_id)
-    return success(selection.to_dict(), status=201)
+    item = selection_service.add_to_cart(g.buyer_id, session_id, product_id, variant_id, quantity)
+    return success(item.to_dict(), status=201)
+
+
+@bp.route("/sessions/<uuid:session_id>/select/<uuid:selection_id>", methods=["PATCH"])
+@require_auth
+def update_cart_item(session_id, selection_id):
+    body = request.get_json(silent=True) or {}
+    quantity = body.get("quantity")
+    if quantity is None:
+        raise ValidationError("quantity is required")
+
+    item = selection_service.update_quantity(g.buyer_id, session_id, selection_id, int(quantity))
+    return success(item.to_dict())
+
+
+@bp.route("/sessions/<uuid:session_id>/select/<uuid:selection_id>", methods=["DELETE"])
+@require_auth
+def remove_cart_item(session_id, selection_id):
+    selection_service.remove_from_cart(g.buyer_id, session_id, selection_id)
+    return success(None, status=200)
 
 
 @bp.route("/sessions/<uuid:session_id>/selection", methods=["GET"])
 @require_auth
-def get_selection(session_id):
-    selection = selection_service.get_active_selection(g.buyer_id, session_id)
-    return success(selection.to_dict() if selection else None)
+def get_cart(session_id):
+    cart = selection_service.get_cart(g.buyer_id, session_id)
+    return success(cart)

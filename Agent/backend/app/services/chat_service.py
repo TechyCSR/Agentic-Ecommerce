@@ -30,6 +30,19 @@ def get_session_for_buyer(buyer_id: str, session_id) -> ChatSession:
     return session
 
 
-def send_message(buyer_id: str, session_id: str, text: str):
+def stream_message(buyer_id: str, session_id: str, text: str):
     session = get_session_for_buyer(buyer_id, session_id)
-    return agent_service.run_agent_turn(session, text)
+    return agent_service.stream_agent_turn(session, text)
+
+
+def rename_session(buyer_id: str, session_id: str, title: str) -> ChatSession:
+    session = get_session_for_buyer(buyer_id, session_id)
+    session.title = title.strip()[:80] or session.title
+    db.session.commit()
+    return session
+
+
+def delete_session(buyer_id: str, session_id: str) -> None:
+    session = get_session_for_buyer(buyer_id, session_id)
+    db.session.delete(session)
+    db.session.commit()
