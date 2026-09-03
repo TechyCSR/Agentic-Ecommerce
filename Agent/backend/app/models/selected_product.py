@@ -24,6 +24,9 @@ class SelectedProduct(UUIDPrimaryKeyMixin, db.Model):
     merchant_name_snapshot = db.Column(db.String(255), nullable=True)
     price_amount_snapshot = db.Column(db.Integer, nullable=False)
     currency_snapshot = db.Column(db.String(10), nullable=False)
+    image_url_snapshot = db.Column(db.Text, nullable=True)
+
+    quantity = db.Column(db.Integer, nullable=False, default=1, server_default="1")
 
     status = db.Column(
         SAEnum(SelectionStatus, name="selection_status"),
@@ -46,6 +49,12 @@ class SelectedProduct(UUIDPrimaryKeyMixin, db.Model):
             "merchant_name": self.merchant_name_snapshot,
             "price": {
                 "amount": self.price_amount_snapshot,
+                "currency": self.currency_snapshot,
+            },
+            "image_url": self.image_url_snapshot,
+            "quantity": self.quantity,
+            "line_total": {
+                "amount": self.price_amount_snapshot * self.quantity,
                 "currency": self.currency_snapshot,
             },
             "status": self.status.value if self.status else None,

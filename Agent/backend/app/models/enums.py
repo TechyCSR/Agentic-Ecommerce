@@ -9,3 +9,4 @@ class MessageRole(str, enum.Enum):
 class SelectionStatus(str, enum.Enum):
     SELECTED = "SELECTED"
     SUPERSEDED = "SUPERSEDED"
+    REMOVED = "REMOVED"
