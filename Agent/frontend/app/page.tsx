@@ -1,22 +1,29 @@
 "use client";
 
-import { Loader2, MessageSquarePlus, Sparkles } from "lucide-react";
+import { MessageSquarePlus, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { CartDrawer } from "@/components/chat/cart-drawer";
 import { ChatInput } from "@/components/chat/chat-input";
-import { MessageBubble } from "@/components/chat/message-bubble";
-import { SelectionBanner } from "@/components/chat/selection-banner";
+import { LiveAssistantBubble, MessageBubble } from "@/components/chat/message-bubble";
 import { MobileSessionHeader, SessionSidebar } from "@/components/chat/session-sidebar";
+import { SuggestionChips } from "@/components/chat/suggestion-chips";
 import { Button } from "@/components/ui/button";
 import {
+  useAddToCart,
+  useCart,
   useCreateSession,
-  useSelectProduct,
-  useSelection,
-  useSendMessage,
   useSession,
   useSessions,
+  useStreamChat,
 } from "@/lib/queries/use-chat";
+
+const STARTER_SUGGESTIONS = [
+  "Show me trending products",
+  "I need a mechanical keyboard under ₹5,000",
+  "Search by category",
+];
 
 export default function ChatPage() {
   const { data: sessions, isLoading: sessionsLoading } = useSessions();
@@ -32,16 +39,16 @@ export default function ChatPage() {
   }
 
   const { data: session, isLoading: sessionLoading } = useSession(activeId ?? undefined);
-  const { data: selection } = useSelection(activeId ?? undefined);
-  const sendMessage = useSendMessage();
-  const selectProduct = useSelectProduct();
+  const { data: cart } = useCart(activeId ?? undefined);
+  const { state: stream, send, stop } = useStreamChat();
+  const addToCart = useAddToCart();
 
-  const [selectingProductId, setSelectingProductId] = useState<string | null>(null);
+  const [addingProductId, setAddingProductId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [session?.messages, sendMessage.isPending]);
+  }, [session?.messages, stream.streamedText, stream.status]);
 
   async function handleNewSession() {
     try {
@@ -53,35 +60,36 @@ export default function ChatPage() {
   }
 
   async function handleSend(text: string): Promise<boolean> {
-    try {
-      // Resolve the session id locally rather than relying on `activeId`
-      // state (setActiveId doesn't take effect until the next render, so
-      // reading `activeId` right after creating a session here would still
-      // see the old, unset value).
-      let sessionId = activeId;
-      if (!sessionId) {
+    // Resolve the session id locally rather than relying on `activeId`
+    // state (setActiveId doesn't take effect until the next render, so
+    // reading `activeId` right after creating a session here would still
+    // see the old, unset value).
+    let sessionId = activeId;
+    if (!sessionId) {
+      try {
         const created = await createSession.mutateAsync();
         setActiveId(created.id);
         sessionId = created.id;
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to start a new chat");
+        return false;
       }
-      await sendMessage.mutateAsync({ sessionId, text });
-      return true;
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to send message");
-      return false;
     }
+    const ok = await send(sessionId, text);
+    if (!ok && stream.error) toast.error(stream.error);
+    return ok;
   }
 
   async function handleBuyNow(productId: string, variantId: string) {
     if (!activeId) return;
-    setSelectingProductId(productId);
+    setAddingProductId(productId);
     try {
-      await selectProduct.mutateAsync({ sessionId: activeId, productId, variantId });
-      toast.success("Added to checkout — ready when you are.");
+      await addToCart.mutateAsync({ sessionId: activeId, productId, variantId });
+      toast.success("Added to cart");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to select this product");
+      toast.error(err instanceof Error ? err.message : "Failed to add this product");
     } finally {
-      setSelectingProductId(null);
+      setAddingProductId(null);
     }
   }
 
@@ -94,13 +102,20 @@ export default function ChatPage() {
     isCreating: createSession.isPending,
   };
 
+  const lastMessage = session?.messages[session.messages.length - 1];
+  const showPersistedSuggestions =
+    !stream.isStreaming && lastMessage?.role === "assistant" && (lastMessage.suggested_replies?.length ?? 0) > 0;
+
   return (
     <div className="flex h-screen w-full overflow-hidden">
       <SessionSidebar {...sidebarProps} />
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <MobileSessionHeader {...sidebarProps} />
-        {selection && <SelectionBanner selection={selection} />}
+        <MobileSessionHeader {...sidebarProps} rightSlot={activeId ? <CartDrawer sessionId={activeId} cart={cart} /> : null} />
+
+        <div className="hidden items-center justify-end border-b px-6 py-2 md:flex">
+          {activeId && <CartDrawer sessionId={activeId} cart={cart} />}
+        </div>
 
         <div className="flex-1 overflow-y-auto p-4 md:p-6">
           {!activeId ? (
@@ -114,22 +129,19 @@ export default function ChatPage() {
                   Describe what you need — I&apos;ll search the real catalog for you.
                 </p>
               </div>
-              <Button onClick={handleNewSession} disabled={createSession.isPending}>
-                {createSession.isPending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <MessageSquarePlus className="size-4" />
-                )}
-                Start chatting
+              <SuggestionChips suggestions={STARTER_SUGGESTIONS} onPick={handleSend} />
+              <Button variant="outline" onClick={handleNewSession} disabled={createSession.isPending}>
+                <MessageSquarePlus className="size-4" />
+                Start a blank chat
               </Button>
             </div>
-          ) : sessionLoading ? (
+          ) : sessionLoading && !session ? (
             <div className="flex h-full items-center justify-center">
-              <Loader2 className="size-6 animate-spin text-muted-foreground" />
+              <Sparkles className="size-6 animate-pulse text-muted-foreground" />
             </div>
           ) : (
             <div className="mx-auto max-w-3xl space-y-6">
-              {(session?.messages ?? []).length === 0 && (
+              {(session?.messages ?? []).length === 0 && !stream.isStreaming && (
                 <p className="text-center text-sm text-muted-foreground">
                   Try: &quot;I need a mechanical keyboard under ₹5,000&quot;
                 </p>
@@ -139,21 +151,34 @@ export default function ChatPage() {
                   key={message.id}
                   message={message}
                   onBuyNow={handleBuyNow}
-                  selectingProductId={selectingProductId}
+                  addingProductId={addingProductId}
+                  onSuggestion={message.id === lastMessage?.id && showPersistedSuggestions ? handleSend : undefined}
+                  suggestionsDisabled={stream.isStreaming}
                 />
               ))}
-              {sendMessage.isPending && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" /> Thinking...
-                </div>
+              {stream.isStreaming && stream.sessionId === activeId && (
+                <LiveAssistantBubble
+                  status={stream.status}
+                  text={stream.streamedText}
+                  cards={stream.cards}
+                  suggestions={stream.suggestions}
+                  onSuggestion={handleSend}
+                  onBuyNow={handleBuyNow}
+                  addingProductId={addingProductId}
+                />
               )}
               <div ref={bottomRef} />
             </div>
           )}
         </div>
 
-        <div className="mx-auto w-full max-w-3xl">
-          <ChatInput onSend={handleSend} disabled={sendMessage.isPending} />
+        <div className="w-full">
+          <ChatInput
+            onSend={handleSend}
+            disabled={stream.isStreaming}
+            isStreaming={stream.isStreaming}
+            onStop={stop}
+          />
         </div>
       </div>
     </div>

@@ -36,11 +36,11 @@ import { cn } from "@/lib/utils";
 export function ProductCardView({
   product,
   onBuyNow,
-  isSelecting,
+  isAdding,
 }: {
   product: ProductCardType;
   onBuyNow: (productId: string, variantId: string) => void;
-  isSelecting: boolean;
+  isAdding: boolean;
 }) {
   const inStockVariants = product.variants.filter((v) => v.availability === "IN_STOCK");
   const defaultVariant = inStockVariants[0] ?? product.variants[0];
@@ -142,15 +142,15 @@ export function ProductCardView({
         </Dialog>
         <Button
           size="sm"
-          disabled={!hasStock || !selectedVariant || isSelecting}
+          disabled={!hasStock || !selectedVariant || isAdding}
           onClick={() => selectedVariant && onBuyNow(product.product_id, selectedVariant.variant_id)}
         >
-          {isSelecting ? (
+          {isAdding ? (
             <Loader2 className="size-3.5 animate-spin" />
           ) : (
             <ShoppingCart className="size-3.5" />
           )}
-          Buy Now
+          Add to cart
         </Button>
       </CardFooter>
     </Card>

@@ -54,6 +54,7 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   product_cards: ProductCard[] | null;
+  suggested_replies: string[] | null;
   created_at: string;
 }
 
@@ -68,9 +69,9 @@ export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[];
 }
 
-export type SelectionStatus = "SELECTED" | "SUPERSEDED";
+export type SelectionStatus = "SELECTED" | "SUPERSEDED" | "REMOVED";
 
-export interface Selection {
+export interface CartItem {
   id: string;
   session_id: string;
   product_id: string;
@@ -79,6 +80,24 @@ export interface Selection {
   variant_name: string;
   merchant_name: string | null;
   price: Money;
+  image_url: string | null;
+  quantity: number;
+  line_total: Money;
   status: SelectionStatus;
   created_at: string;
 }
+
+export interface Cart {
+  items: CartItem[];
+  total: Money;
+}
+
+// SSE event shapes streamed from POST /sessions/:id/messages
+export type StreamEvent =
+  | { type: "tool_start"; tool: string; label?: string }
+  | { type: "tool_end"; tool: string; result_count?: number; error?: boolean }
+  | { type: "token"; delta: string }
+  | { type: "product_cards"; cards: ProductCard[] }
+  | { type: "suggestions"; items: string[] }
+  | { type: "done"; message_id: string }
+  | { type: "error"; message: string };
