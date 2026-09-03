@@ -10,7 +10,12 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, db.Model):
     __tablename__ = "orders"
 
     session_id = db.Column(
-        UUID(as_uuid=True), db.ForeignKey("chat_sessions.id"), nullable=True, index=True
+        UUID(as_uuid=True),
+        # SET NULL: an order is a financial record. Deleting the chat it came
+        # from must never delete it, nor be blocked by it.
+        db.ForeignKey("chat_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     buyer_clerk_user_id = db.Column(db.String(255), nullable=False, index=True)
 
