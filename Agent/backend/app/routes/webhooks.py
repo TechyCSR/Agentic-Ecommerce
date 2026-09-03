@@ -13,13 +13,14 @@ secret).
 
 import hashlib
 import hmac
+import threading
 
 from flask import Blueprint, current_app, request
 
 from app.extensions import db
 from app.models import Order, Payment
 from app.models.enums import PaymentStatus
-from app.services import audit_service, payment_service
+from app.services import audit_service, payment_service, telegram_service
 from app.utils.responses import success
 
 bp = Blueprint("webhooks", __name__, url_prefix="/api/v1/webhooks")
@@ -105,3 +106,31 @@ def razorpay_webhook():
         )
 
     return success({"received": True})
+
+
+@bp.route("/telegram", methods=["POST"])
+def telegram_webhook():
+    """Telegram delivers updates here.
+
+    Authenticated by the secret token Telegram echoes back in a header (set
+    when the webhook is registered), not by Clerk — Telegram has no user
+    session. Work happens on a background thread so this returns instantly:
+    an agent turn can take many seconds, and a slow 200 makes Telegram retry
+    and duplicate the reply.
+    """
+    expected = current_app.config.get("TELEGRAM_WEBHOOK_SECRET") or ""
+    provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
+    if not expected or not hmac.compare_digest(expected, provided):
+        audit_service.log_event(
+            action="TELEGRAM_WEBHOOK_REJECTED",
+            metadata={"reason": "invalid_secret_token"},
+        )
+        return success({"ok": True})
+
+    update = request.get_json(silent=True) or {}
+    threading.Thread(
+        target=telegram_service.process_update,
+        args=(current_app._get_current_object(), update),
+        daemon=True,
+    ).start()
+    return success({"ok": True})
