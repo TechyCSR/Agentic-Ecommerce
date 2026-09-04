@@ -226,12 +226,17 @@ def release_stock_for_order(order: Order, reason: str) -> None:
         )
 
 
-def _release_stale_holds(buyer_id: str, session_id, keep_order_id=None) -> None:
+def release_stale_holds(buyer_id: str, session_id, keep_order_id=None) -> None:
     """Frees holds left by this session's earlier, superseded checkouts.
 
-    Without this a buyer blocks themselves: they price a cart, change it,
-    and the new checkout finds the last unit "unavailable" — held by their
-    own abandoned order.
+    Without this a buyer blocks themselves. The merchant reports stock net
+    of *all* holds, so a buyer who priced a cart and then changed it is told
+    their own units are "out of stock" — observed in production as a cart
+    that refused every quantity change while a 20-unit hold from an
+    abandoned payment was still live.
+
+    Called both when re-pricing a checkout and on any cart edit: changing
+    the cart is what makes the priced order stale in the first place.
     """
     stale = Order.query.filter(
         Order.buyer_clerk_user_id == buyer_id,
@@ -312,7 +317,7 @@ def create_checkout(buyer_id: str, session_id) -> Order:
     # This cart differs from anything already priced, so any hold those older
     # checkouts are sitting on is now stale — and would otherwise block this
     # buyer from their own stock.
-    _release_stale_holds(buyer_id, session.id)
+    release_stale_holds(buyer_id, session.id)
 
     audit_service.log_event(
         action="CHECKOUT_STARTED",

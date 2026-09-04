@@ -50,6 +50,24 @@ def _verify_variant(product_id: str, variant_id: str) -> tuple[dict, dict]:
     return product, variant
 
 
+def _free_own_holds(buyer_id: str, session_id) -> None:
+    """Drops holds from this session's own unpaid checkouts before we read
+    stock.
+
+    The catalog reports availability net of every hold, including this
+    buyer's. Editing the cart invalidates whatever was priced earlier, so
+    holding onto those units would only block the buyer from their own
+    stock — which is exactly what a 20-unit hold from an abandoned payment
+    did in production.
+    """
+    from app.services import checkout_service
+
+    try:
+        checkout_service.release_stale_holds(buyer_id, session_id)
+    except Exception:  # noqa: BLE001 — tidying holds must never fail a cart edit
+        pass
+
+
 def _available(variant: dict) -> int:
     """Units this buyer could actually get right now — the merchant reports
     this net of stock other buyers are holding mid-checkout."""
@@ -70,6 +88,7 @@ def _annotate(item, requested: int, granted: int, available: int):
 
 def add_to_cart(buyer_id: str, session_id: str, product_id: str, variant_id: str, quantity: int = 1):
     session = chat_service.get_session_for_buyer(buyer_id, session_id)
+    _free_own_holds(buyer_id, session.id)
 
     try:
         product, variant = _verify_variant(product_id, variant_id)
@@ -156,6 +175,8 @@ def update_quantity(buyer_id: str, session_id: str, selection_id: str, quantity:
     if item.buyer_clerk_user_id != buyer_id:
         raise ForbiddenError("You do not have access to this cart item.", code="CART_ITEM_FORBIDDEN")
 
+    _free_own_holds(buyer_id, session.id)
+
     # Re-verify stock before honoring a bumped-up quantity — never trust the
     # client's number against unchecked availability.
     _, variant = _verify_variant(str(item.product_id), str(item.variant_id))
@@ -193,6 +214,9 @@ def remove_from_cart(buyer_id: str, session_id: str, selection_id: str):
 
     item.status = SelectionStatus.REMOVED
     db.session.commit()
+
+    # The cart no longer matches whatever was priced, so its hold is stale.
+    _free_own_holds(buyer_id, session.id)
 
     audit_service.log_event(
         action="PRODUCT_REMOVED",
