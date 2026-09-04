@@ -48,6 +48,13 @@ class Config:
     # checkout instead. 0 disables the app-side check.
     MAX_ORDER_AMOUNT = int(os.getenv("MAX_ORDER_AMOUNT", "0"))
 
+    # How long to ask the Merchant service to hold a priced order's stock.
+    # It caps this at 60 minutes; the window only needs to cover a buyer
+    # walking through Razorpay Checkout.
+    STOCK_RESERVATION_TTL_MINUTES = int(
+        os.getenv("STOCK_RESERVATION_TTL_MINUTES", "15")
+    )
+
     # Telegram channel — the bot token talks to Telegram's API, the webhook
     # secret authenticates updates arriving from it.
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

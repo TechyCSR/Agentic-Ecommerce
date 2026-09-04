@@ -44,6 +44,11 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, db.Model):
 
     confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
+    # When the Merchant service's hold on this order's stock lapses. Set at
+    # checkout so the buyer's units survive the walk through Razorpay; after
+    # it passes the stock is anyone's again and the order must be re-priced.
+    stock_reserved_until = db.Column(db.DateTime(timezone=True), nullable=True)
+
     # Ids of the order(s) this became in the Merchant service. A list because
     # one cart can span stores, and a Merchant order belongs to exactly one.
     merchant_order_ids = db.Column(JSONB, nullable=True)
@@ -73,6 +78,9 @@ class Order(UUIDPrimaryKeyMixin, TimestampMixin, db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "shipping_address": self.shipping_address,
             "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
+            "stock_reserved_until": (
+                self.stock_reserved_until.isoformat() if self.stock_reserved_until else None
+            ),
             "merchant_order_ids": self.merchant_order_ids or [],
             "merchant_synced_at": (
                 self.merchant_synced_at.isoformat() if self.merchant_synced_at else None

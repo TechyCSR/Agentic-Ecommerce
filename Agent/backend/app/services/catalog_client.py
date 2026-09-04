@@ -153,6 +153,72 @@ def create_order(payload: dict) -> dict:
     return body["data"]
 
 
+class StockUnavailableError(Exception):
+    """The merchant won't hold the stock — someone else has it.
+
+    Distinct from MerchantSyncError because it happens *before* any money
+    moves: the honest outcome is to stop the checkout and tell the buyer,
+    not to charge them and refund afterwards.
+    """
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
+def reserve_stock(agent_order_id: str, items: list, ttl_minutes=None) -> dict:
+    """Asks the Merchant service to hold this order's stock while the buyer pays.
+
+    Raises StockUnavailableError when the goods are already spoken for — a
+    clean pre-payment failure. Any other problem is a CatalogError, which the
+    caller treats as "proceed without a hold" rather than blocking a
+    legitimate checkout on a transient merchant hiccup.
+    """
+    payload = {"agent_order_id": agent_order_id, "items": items}
+    if ttl_minutes:
+        payload["ttl_minutes"] = ttl_minutes
+
+    try:
+        resp = requests.post(
+            f"{_base_url()}/api/v1/agent/reservations",
+            headers={**_headers(), "Content-Type": "application/json"},
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise CatalogError(f"Stock reservation request failed: {exc}") from exc
+
+    body = resp.json() if resp.content else {}
+    if resp.status_code in (200, 201) and body.get("success"):
+        return body["data"]
+
+    error = body.get("error") or {}
+    code = error.get("code")
+    if code in ("INSUFFICIENT_STOCK", "PRODUCT_NOT_AVAILABLE", "VARIANT_NOT_FOUND"):
+        raise StockUnavailableError(
+            error.get("message") or "Those items are no longer available.", code=code
+        )
+    raise CatalogError(
+        error.get("message") or f"Stock reservation failed with status {resp.status_code}"
+    )
+
+
+def release_stock(agent_order_id: str, reason: str | None = None) -> bool:
+    """Hands held stock back early. Best-effort: the hold expires on its own,
+    so a failure here costs a wait, never correctness."""
+    try:
+        resp = requests.delete(
+            f"{_base_url()}/api/v1/agent/reservations/{agent_order_id}",
+            headers={**_headers(), "Content-Type": "application/json"},
+            json={"reason": reason},
+            timeout=REQUEST_TIMEOUT,
+        )
+        return resp.status_code == 200
+    except requests.RequestException:
+        return False
+
+
 def get_merchant_order(agent_order_id: str):
     """Reads fulfillment status back from the Merchant service, so the agent
     can answer "where is my order?". Returns None if it hasn't synced."""
