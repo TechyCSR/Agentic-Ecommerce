@@ -84,6 +84,17 @@ def send_message(session_id):
     )
 
 
+def _with_stock_notice(item) -> dict:
+    """Cart line plus, when the quantity was trimmed to available stock, what
+    was asked for — so the UI can say why it got fewer than requested."""
+    data = item.to_dict()
+    if getattr(item, "stock_limited", False):
+        data["stock_limited"] = True
+        data["requested_quantity"] = item.requested_quantity
+        data["available_stock"] = item.available_stock
+    return data
+
+
 @bp.route("/sessions/<uuid:session_id>/select", methods=["POST"])
 @require_auth
 def add_to_cart(session_id):
@@ -95,7 +106,7 @@ def add_to_cart(session_id):
         raise ValidationError("product_id and variant_id are required")
 
     item = selection_service.add_to_cart(g.buyer_id, session_id, product_id, variant_id, quantity)
-    return success(item.to_dict(), status=201)
+    return success(_with_stock_notice(item), status=201)
 
 
 @bp.route("/sessions/<uuid:session_id>/select/<uuid:selection_id>", methods=["PATCH"])
@@ -107,7 +118,7 @@ def update_cart_item(session_id, selection_id):
         raise ValidationError("quantity is required")
 
     item = selection_service.update_quantity(g.buyer_id, session_id, selection_id, int(quantity))
-    return success(item.to_dict())
+    return success(_with_stock_notice(item))
 
 
 @bp.route("/sessions/<uuid:session_id>/select/<uuid:selection_id>", methods=["DELETE"])

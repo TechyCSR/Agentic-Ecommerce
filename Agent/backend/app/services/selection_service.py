@@ -2,6 +2,12 @@
 catalog API on every write. Price/stock/product info is never trusted from
 the request or from anything cached earlier in the conversation — only from
 a live catalog_client.get_product() call made here, server-side.
+
+A cart line can never exceed what is actually buyable. The catalog's
+`stock_quantity` is already net of other buyers' checkout holds, so the
+ceiling here is real availability, not shelf count. Asking for more than
+that is capped to the ceiling and reported back rather than silently
+accepted — a cart that can't survive checkout is worse than a smaller one.
 """
 
 from app.extensions import db
@@ -44,6 +50,24 @@ def _verify_variant(product_id: str, variant_id: str) -> tuple[dict, dict]:
     return product, variant
 
 
+def _available(variant: dict) -> int:
+    """Units this buyer could actually get right now — the merchant reports
+    this net of stock other buyers are holding mid-checkout."""
+    return max(0, int(variant.get("stock_quantity") or 0))
+
+
+def _annotate(item, requested: int, granted: int, available: int):
+    """Records that a quantity was trimmed, so the caller can say so.
+
+    Plain instance attributes, not columns: this describes what just
+    happened to one request, not a fact about the cart line.
+    """
+    item.requested_quantity = requested
+    item.stock_limited = granted < requested
+    item.available_stock = available
+    return item
+
+
 def add_to_cart(buyer_id: str, session_id: str, product_id: str, variant_id: str, quantity: int = 1):
     session = chat_service.get_session_for_buyer(buyer_id, session_id)
 
@@ -66,9 +90,23 @@ def add_to_cart(buyer_id: str, session_id: str, product_id: str, variant_id: str
     ).first()
 
     price = variant.get("price") or {}
+    available = _available(variant)
+
+    # "Add 2 more" means two on top of what is already there, so the ceiling
+    # applies to the resulting total — not to this request in isolation.
+    already = existing.quantity if existing else 0
+    requested = already + max(int(quantity), 1)
+    granted = min(requested, available)
+
+    if granted <= already:
+        raise ValidationError(
+            f"Your cart already has all {available} available of "
+            f"'{product['name']}' — there aren't any more to add.",
+            code="INSUFFICIENT_STOCK",
+        )
 
     if existing:
-        existing.quantity += max(int(quantity), 1)
+        existing.quantity = granted
         db.session.commit()
         item = existing
     else:
@@ -83,7 +121,7 @@ def add_to_cart(buyer_id: str, session_id: str, product_id: str, variant_id: str
             price_amount_snapshot=price.get("amount", 0),
             currency_snapshot=price.get("currency", "INR"),
             image_url_snapshot=_primary_image(product),
-            quantity=max(int(quantity), 1),
+            quantity=granted,
             status=SelectionStatus.SELECTED,
         )
         db.session.add(item)
@@ -98,10 +136,13 @@ def add_to_cart(buyer_id: str, session_id: str, product_id: str, variant_id: str
             "product_id": str(product["product_id"]),
             "variant_id": str(variant["variant_id"]),
             "quantity": item.quantity,
+            "requested_quantity": requested,
+            "stock_limited": granted < requested,
+            "available_stock": available,
             "price": price,
         },
     )
-    return item
+    return _annotate(item, requested, granted, available)
 
 
 def update_quantity(buyer_id: str, session_id: str, selection_id: str, quantity: int):
@@ -117,11 +158,29 @@ def update_quantity(buyer_id: str, session_id: str, selection_id: str, quantity:
 
     # Re-verify stock before honoring a bumped-up quantity — never trust the
     # client's number against unchecked availability.
-    _verify_variant(str(item.product_id), str(item.variant_id))
+    _, variant = _verify_variant(str(item.product_id), str(item.variant_id))
 
-    item.quantity = quantity
+    available = _available(variant)
+    granted = min(quantity, available)
+
+    item.quantity = granted
     db.session.commit()
-    return item
+
+    audit_service.log_event(
+        action="CART_QUANTITY_UPDATED",
+        resource_id=item.id,
+        session_id=session.id,
+        buyer_clerk_user_id=buyer_id,
+        metadata={
+            "product_id": str(item.product_id),
+            "variant_id": str(item.variant_id),
+            "quantity": granted,
+            "requested_quantity": quantity,
+            "stock_limited": granted < quantity,
+            "available_stock": available,
+        },
+    )
+    return _annotate(item, quantity, granted, available)
 
 
 def remove_from_cart(buyer_id: str, session_id: str, selection_id: str):
