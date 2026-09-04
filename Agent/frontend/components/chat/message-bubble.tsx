@@ -1,6 +1,7 @@
 "use client";
 
-import { RefreshCw, Sparkles } from "lucide-react";
+import { Check, RefreshCw, Sparkles, X } from "lucide-react";
+import { useRef, useState } from "react";
 
 import { AgentActivity } from "@/components/chat/agent-activity";
 import { MarkdownContent } from "@/components/chat/markdown-content";
@@ -39,11 +40,21 @@ export function UserMessage({
   content,
   createdAt,
   onEdit,
+  isEditing,
+  onSaveEdit,
+  onCancelEdit,
 }: {
   content: string;
   createdAt?: string;
   onEdit?: () => void;
+  isEditing?: boolean;
+  onSaveEdit?: (text: string) => void;
+  onCancelEdit?: () => void;
 }) {
+  if (isEditing && onSaveEdit && onCancelEdit) {
+    return <UserMessageEditor content={content} onSave={onSaveEdit} onCancel={onCancelEdit} />;
+  }
+
   return (
     <div className="group animate-in fade-in slide-in-from-bottom-2 flex flex-col items-end gap-1 duration-300">
       <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm whitespace-pre-wrap text-primary-foreground shadow-sm">
@@ -61,6 +72,82 @@ export function UserMessage({
   );
 }
 
+/**
+ * Edits a question where it sits, rather than sending the buyer back to the
+ * composer at the bottom of the page. The message keeps its place in the
+ * conversation, so it stays obvious which turn is being rewritten.
+ */
+function UserMessageEditor({
+  content,
+  onSave,
+  onCancel,
+}: {
+  content: string;
+  onSave: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(content);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const unchanged = value.trim() === content.trim();
+
+  function submit() {
+    const text = value.trim();
+    if (!text || unchanged) return onCancel();
+    onSave(text);
+  }
+
+  /** Grows with the text so a long question isn't edited through a slot. */
+  function fit(el: HTMLTextAreaElement | null) {
+    if (!el) return;
+    ref.current = el;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }
+
+  return (
+    <div className="animate-in fade-in flex flex-col items-end gap-2 duration-200">
+      <div className="w-full max-w-[85%] rounded-2xl rounded-br-md border border-primary/40 bg-primary/5 p-2 shadow-sm">
+        <textarea
+          ref={fit}
+          autoFocus
+          value={value}
+          rows={1}
+          aria-label="Edit your message"
+          className="max-h-60 w-full resize-none bg-transparent px-2 py-1 text-sm outline-none"
+          onChange={(e) => {
+            setValue(e.target.value);
+            fit(e.currentTarget);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+        <div className="flex items-center justify-between gap-2 px-1 pt-1">
+          <span className="text-[11px] text-muted-foreground">
+            Everything after this is replaced
+          </span>
+          <div className="flex gap-1">
+            <Button variant="ghost" size="sm" onClick={onCancel}>
+              <X className="size-3.5" />
+              Cancel
+            </Button>
+            <Button size="sm" disabled={!value.trim() || unchanged} onClick={submit}>
+              <Check className="size-3.5" />
+              Send
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MessageBubble({
   message,
   onBuyNow,
@@ -70,6 +157,9 @@ export function MessageBubble({
   suggestionsDisabled,
   onRetry,
   onEdit,
+  isEditing,
+  onSaveEdit,
+  onCancelEdit,
 }: {
   message: ChatMessage;
   onBuyNow: (productId: string, variantId: string) => void;
@@ -79,6 +169,9 @@ export function MessageBubble({
   suggestionsDisabled?: boolean;
   onRetry?: () => void;
   onEdit?: () => void;
+  isEditing?: boolean;
+  onSaveEdit?: (text: string) => void;
+  onCancelEdit?: () => void;
 }) {
   if (message.role === "user") {
     return (
@@ -86,6 +179,9 @@ export function MessageBubble({
         content={message.content}
         createdAt={message.created_at}
         onEdit={onEdit}
+        isEditing={isEditing}
+        onSaveEdit={onSaveEdit}
+        onCancelEdit={onCancelEdit}
       />
     );
   }

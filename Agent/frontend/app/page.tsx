@@ -48,7 +48,8 @@ export default function ChatPage() {
   const addToCart = useAddToCart();
 
   const [addingProductId, setAddingProductId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<{ text: string; nonce: number; fromId: string } | null>(null);
+  // The message currently being rewritten in place, if any.
+  const [editingId, setEditingId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -171,15 +172,14 @@ export default function ChatPage() {
                   }
                   suggestionsDisabled={stream.isStreaming}
                   onEdit={
-                    message.role === "user"
-                      ? () =>
-                          setDraft({
-                            text: message.content,
-                            nonce: Date.now(),
-                            fromId: message.id,
-                          })
-                      : undefined
+                    message.role === "user" ? () => setEditingId(message.id) : undefined
                   }
+                  isEditing={editingId === message.id}
+                  onCancelEdit={() => setEditingId(null)}
+                  onSaveEdit={(text) => {
+                    setEditingId(null);
+                    handleSend(text, message.id);
+                  }}
                   onRetry={
                     // Replace this reply: drop it and the question that
                     // produced it, then ask again.
@@ -228,12 +228,7 @@ export default function ChatPage() {
           )}
         </div>
 
-        <ChatInput
-          onSend={handleSend}
-          isStreaming={stream.isStreaming}
-          onStop={stop}
-          draft={draft}
-        />
+        <ChatInput onSend={handleSend} isStreaming={stream.isStreaming} onStop={stop} />
       </div>
     </div>
   );

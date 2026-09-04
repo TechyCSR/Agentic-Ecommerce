@@ -10,28 +10,15 @@ export function ChatInput({
   onSend,
   isStreaming,
   onStop,
-  draft,
 }: {
-  onSend: (text: string, rewindFromId?: string) => Promise<boolean>;
+  onSend: (text: string) => Promise<boolean>;
   isStreaming?: boolean;
   onStop?: () => void;
-  /** Text loaded into the composer, e.g. from "edit & resend". The nonce
-   * makes re-editing the same message work — the text alone wouldn't change. */
-  draft?: { text: string; nonce: number; fromId?: string } | null;
 }) {
+  // Editing a past message happens in place, in the conversation — the
+  // composer only ever holds a brand-new question.
   const [value, setValue] = useState("");
-  const [adoptedNonce, setAdoptedNonce] = useState<number | null>(null);
-  // Set while editing a past message: sending rewinds to that point first.
-  const [rewindFromId, setRewindFromId] = useState<string | undefined>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // Adjust during render rather than in an effect (this project disallows
-  // setState inside effects), guarded so it runs once per Edit click.
-  if (draft && draft.nonce !== adoptedNonce) {
-    setAdoptedNonce(draft.nonce);
-    setValue(draft.text);
-    setRewindFromId(draft.fromId);
-  }
 
   async function handleSend() {
     const text = value.trim();
@@ -39,14 +26,9 @@ export function ChatInput({
     // agent works so the buyer can keep typing their next question.
     if (!text) return;
     setValue("");
-    const rewind = rewindFromId;
-    setRewindFromId(undefined);
-    const sent = await onSend(text, rewind);
+    const sent = await onSend(text);
     // Restore the draft rather than silently losing it if the send failed.
-    if (!sent) {
-      setValue((current) => current || text);
-      setRewindFromId(rewind);
-    }
+    if (!sent) setValue((current) => current || text);
   }
 
   return (
@@ -55,7 +37,6 @@ export function ChatInput({
         <Textarea
           ref={textareaRef}
           value={value}
-          autoFocus={adoptedNonce !== null}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
