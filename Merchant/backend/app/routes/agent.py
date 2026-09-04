@@ -165,3 +165,17 @@ def agent_release_stock(agent_order_id):
         api_client_id=g.api_client.id,
     )
     return success({"agent_order_id": agent_order_id, "released": released})
+
+
+@bp.route("/catalog/facets", methods=["GET"])
+@require_scopes(ApiScope.CATALOG_READ.value)
+def agent_catalog_facets():
+    """What the catalog actually contains — every category with a live
+    product count, and the brands worth naming.
+
+    The agent grounds itself on this so it constrains a search with values
+    that exist. Without it the model invents a plausible category, gets an
+    empty result, and tells the buyer the store doesn't sell something it
+    does.
+    """
+    return success(search_service.catalog_facets())
