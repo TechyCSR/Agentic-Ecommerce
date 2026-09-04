@@ -88,6 +88,19 @@ FULFILLMENT_FLOW = [
 ]
 
 
+class ReservationStatus(str, enum.Enum):
+    """A stock hold's lifecycle.
+
+    HELD only counts until `expires_at`: availability filters on the
+    timestamp, so a hold nobody released stops blocking stock the moment it
+    lapses. RELEASED and CONSUMED are the settled outcomes.
+    """
+
+    HELD = "HELD"
+    CONSUMED = "CONSUMED"
+    RELEASED = "RELEASED"
+
+
 class PaymentProvider(str, enum.Enum):
     RAZORPAY = "RAZORPAY"
 

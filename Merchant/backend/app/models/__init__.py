@@ -9,6 +9,7 @@ from app.models.payment import Payment
 from app.models.product import Product
 from app.models.product_image import ProductImage
 from app.models.product_variant import ProductVariant
+from app.models.stock_reservation import StockReservation
 from app.models.store import Store
 from app.models.user import User
 
@@ -25,6 +26,7 @@ __all__ = [
     "Product",
     "ProductImage",
     "ProductVariant",
+    "StockReservation",
     "Store",
     "User",
     "product_categories",
