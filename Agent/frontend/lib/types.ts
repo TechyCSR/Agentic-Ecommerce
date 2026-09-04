@@ -164,6 +164,9 @@ export interface PreparedCheckout {
   amount: number;
   currency: string;
   items: OrderItem[];
+  /** When the merchant's hold on this order's stock lapses. */
+  stock_reserved_until: string | null;
+  stock_hold_seconds: number | null;
 }
 
 export interface Receipt {

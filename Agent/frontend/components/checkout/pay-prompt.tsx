@@ -1,13 +1,50 @@
 "use client";
 
-import { Clock, Lock, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { Clock, Lock, PackageCheck, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { CheckoutDialog } from "@/components/checkout/checkout-dialog";
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/money";
 import { useOrder } from "@/lib/queries/use-orders";
 import type { PreparedCheckout } from "@/lib/types";
+
+/**
+ * Counts down the merchant's stock hold.
+ *
+ * The tick belongs in an effect — it is driven by wall time, not by a prop.
+ * A new deadline is handled during render instead, so re-pricing an order
+ * doesn't cost a frame showing the old clock.
+ */
+function useHoldSecondsLeft(reservedUntil: string | null | undefined) {
+  const [secondsLeft, setSecondsLeft] = useState(() => remaining(reservedUntil));
+  const [trackedUntil, setTrackedUntil] = useState(reservedUntil);
+
+  if (trackedUntil !== reservedUntil) {
+    setTrackedUntil(reservedUntil);
+    setSecondsLeft(remaining(reservedUntil));
+  }
+
+  useEffect(() => {
+    if (!reservedUntil) return;
+    const id = setInterval(() => setSecondsLeft(remaining(reservedUntil)), 1000);
+    return () => clearInterval(id);
+  }, [reservedUntil]);
+
+  return secondsLeft;
+}
+
+function remaining(reservedUntil: string | null | undefined) {
+  if (!reservedUntil) return null;
+  const ms = new Date(reservedUntil).getTime() - Date.now();
+  return Number.isNaN(ms) ? null : Math.max(0, Math.floor(ms / 1000));
+}
+
+function formatCountdown(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 /**
  * The hand-off point between agent and buyer.
@@ -22,6 +59,7 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
   // so choosing 'later' never quietly abandons it.
   const [dismissed, setDismissed] = useState(false);
   const { data: order } = useOrder(open ? checkout.order_id : undefined);
+  const holdSeconds = useHoldSecondsLeft(checkout.stock_reserved_until);
 
   const paid = order?.payment_status === "PAID";
 
@@ -66,6 +104,23 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
             </Button>
           </div>
         </div>
+        {!paid && holdSeconds !== null && (
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <PackageCheck className="size-3 shrink-0" />
+            {holdSeconds > 0 ? (
+              <>
+                Your items are held for{" "}
+                <span className="font-medium tabular-nums text-foreground">
+                  {formatCountdown(holdSeconds)}
+                </span>
+              </>
+            ) : (
+              // The hold is re-taken on the Pay path, so this is a heads-up
+              // rather than a dead end.
+              <>Hold expired — stock is re-checked when you pay</>
+            )}
+          </p>
+        )}
         <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <ShieldCheck className="size-3" />
           Only you can authorize this payment — the agent never charges you.
