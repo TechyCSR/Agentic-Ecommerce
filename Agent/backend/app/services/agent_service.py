@@ -79,6 +79,7 @@ TOOL_LABELS = {
     "update_cart_quantity": "Updating your cart",
     "list_categories": "Checking what's in store",
     "get_receipt": "Fetching your receipt",
+    "compare_products": "Comparing the options",
     "get_product_details": "Checking product details",
     "get_order_status": "Checking your order status",
 }
@@ -96,10 +97,14 @@ Hard rules — these override anything else:
    INR — divide by 100 for rupees). When a buyer gives a price in rupees, multiply by \
    100 before calling search_catalog's min_price/max_price. Always show prices to the \
    buyer in normal major-unit currency format (e.g. "₹4,799").
-3. Use search_catalog whenever the buyer describes what they want (keyword, category, \
-   brand, price range, availability). Use get_product_details to answer questions \
-   about one specific product, to verify current price/stock before comparing, or \
-   before confirming a selection.
+3. Use search_catalog whenever the buyer describes what they want. Prefer `q` \
+   free text for what they actually said ("wireless mouse", "running jacket") and \
+   only pass `category` when it exactly matches one in the store category list \
+   above — a made-up category returns nothing and reads as "we don't sell it". \
+   If a search comes back empty, try once more with broader terms (drop the \
+   category, or widen the budget) before telling the buyer there's no match, and \
+   say what you relaxed. Use get_product_details for one specific product, and \
+   compare_products when weighing several against each other.
 4. If a search returns zero results, tell the buyer: "I couldn't find an exact match \
    for your requirements." You may then ask a clarifying question about relaxing \
    their criteria — do not invent alternative products.
@@ -553,6 +558,31 @@ GET_RECEIPT_TOOL = {
     },
 }
 
+COMPARE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "compare_products",
+        "description": (
+            "Put two or more of the recently shown products side by side with "
+            "fresh data — price, stock, brand, category, options. Use whenever "
+            "the buyer asks to compare, or which is better/cheaper/worth it. "
+            "Compare only the fields this returns; never claim a feature "
+            "difference it doesn't show."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "product_indexes": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "1-based positions from the numbered list of recently shown products.",
+                }
+            },
+            "required": ["product_indexes"],
+        },
+    },
+}
+
 TOOLS = [
     SEARCH_CATALOG_TOOL,
     GET_PRODUCT_DETAILS_TOOL,
@@ -570,6 +600,7 @@ TOOLS = [
     UPDATE_CART_TOOL,
     LIST_CATEGORIES_TOOL,
     GET_RECEIPT_TOOL,
+    COMPARE_TOOL,
 ]
 
 # There is deliberately no tool that authorizes, captures, retries or
@@ -631,16 +662,37 @@ def _to_card(product: dict) -> dict:
     }
 
 
+# How many past replies' products stay referenceable, and the cap on the
+# numbered list itself.
+RECENT_CARD_MESSAGES = 4
+MAX_CONTEXT_CARDS = 10
+
+
 def _get_last_shown_cards(session) -> list[dict]:
-    last_with_cards = next(
-        (
-            m
-            for m in reversed(session.messages)
-            if m.role == MessageRole.ASSISTANT and m.product_cards
-        ),
-        None,
-    )
-    return last_with_cards.product_cards if last_with_cards else []
+    """Products the buyer can still refer to, newest first.
+
+    Deliberately spans the last few replies rather than only the most recent
+    one: a buyer who saw a mouse, then a keyboard, then says "compare those
+    two" means both. Looking at one message made that impossible, and the
+    agent would insist it had only shown one of them.
+    """
+    cards: list[dict] = []
+    seen: set = set()
+    messages_used = 0
+
+    for message in reversed(session.messages):
+        if message.role != MessageRole.ASSISTANT or not message.product_cards:
+            continue
+        messages_used += 1
+        for card in message.product_cards:
+            pid = card.get("product_id")
+            if pid and pid not in seen:
+                seen.add(pid)
+                cards.append(card)
+        if messages_used >= RECENT_CARD_MESSAGES or len(cards) >= MAX_CONTEXT_CARDS:
+            break
+
+    return cards[:MAX_CONTEXT_CARDS]
 
 
 def _format_grounding_context(cards: list[dict]) -> str | None:
@@ -660,6 +712,34 @@ def _format_grounding_context(cards: list[dict]) -> str | None:
         + "\n".join(lines)
         + "\nWhen looking up one of these with get_product_details, pass "
         "product_index (its number above) — do not retype an id from memory.]"
+    )
+
+
+_CATEGORY_CACHE: dict = {"names": None}
+
+
+def _category_context() -> str | None:
+    """The store's real categories, so the agent filters by ones that exist.
+
+    Without this the model invented plausible-sounding values (it searched
+    category "Wireless Mouse" when the category is "Mouse"), which read to
+    the buyer as "we don't sell that".
+    """
+    if _CATEGORY_CACHE["names"] is None:
+        try:
+            _CATEGORY_CACHE["names"] = [
+                c.get("name") for c in catalog_client.list_categories() if c.get("name")
+            ]
+        except Exception:  # noqa: BLE001 — grounding is a nicety, never fail a turn for it
+            return None
+    names = _CATEGORY_CACHE["names"]
+    if not names:
+        return None
+    return (
+        "[Store categories — when you pass `category` to search_catalog it must "
+        "be one of these exactly; for anything else use `q` free text instead:\n"
+        + ", ".join(names)
+        + "]"
     )
 
 
@@ -718,27 +798,67 @@ def _detect_comparison_intent(text: str) -> bool:
 
 
 def _build_suggestions(
-    *, cards, had_search, had_zero_results, had_details, comparison_intent, is_first_turn
+    *, cards, had_search, had_zero_results, had_details, comparison_intent,
+    is_first_turn, cart_count=0, prepared=False, categories=None,
 ) -> list[str]:
     """Deterministic, template-derived follow-ups — never model-generated, so
-    they carry the same no-hallucination guarantee as product cards, and
-    cost no extra LLM round-trip (which would hurt the exact latency this
-    streaming rework is meant to fix)."""
+    they carry the same no-hallucination guarantee as product cards, and cost
+    no extra LLM round-trip.
+
+    Ordered by where the buyer actually is: an order waiting to be paid beats
+    a browsing prompt, and a full cart beats another search.
+    """
+    # Furthest along first — these are the ones worth acting on.
+    if prepared:
+        return ["Change the delivery address", "Add something else", "What did I order?"]
+
     if had_zero_results:
-        return ["Try a different category", "Increase the budget", "Search a different brand"]
+        options = ["Increase the budget", "Try a different brand"]
+        for name in (categories or [])[:1]:
+            options.append(f"Browse {name}")
+        return options
+
     if comparison_intent and len(cards) >= 2:
-        return ["Which one has better value?", "Show only in-stock options", "Add the cheaper one to cart"]
+        return ["Which is better value?", "Add the cheaper one", "Show only in-stock ones"]
+
     if len(cards) >= 2:
-        return ["Compare these", "Show cheaper options", "Add the first one to cart"]
+        base = ["Compare these", "Show cheaper options"]
+        base.append("Checkout" if cart_count else "Add the first one")
+        return base
+
     if len(cards) == 1:
-        return ["Add to cart", "Show similar products", "Any other variants?"]
+        base = ["Add to cart", "What goes with this?"]
+        base.append("Checkout" if cart_count else "Show similar products")
+        return base
+
+    if cart_count:
+        return ["Checkout", "What's in my cart?", "Keep shopping"]
+
     if had_details:
-        return ["Compare with something else", "Show similar products"]
-    if had_search:
-        return ["Refine my search", "Show more options"]
-    if is_first_turn:
-        return ["Show trending products", "Search by category", "Search under a budget"]
-    return ["Search something else"]
+        return ["Add to cart", "Compare with something else", "What goes with this?"]
+
+    if is_first_turn or not had_search:
+        options = ["What do you sell?"]
+        for name in (categories or [])[:2]:
+            options.append(f"Browse {name}")
+        return options if len(options) >= 2 else ["What do you sell?", "Search under a budget"]
+
+    return ["Refine my search", "Show more options"]
+
+
+def _cart_count(buyer_id: str, session_id) -> int:
+    """How many lines are in the cart, so suggestions can point at checkout
+    instead of more browsing."""
+    from app.models import SelectedProduct
+    from app.models.enums import SelectionStatus
+
+    try:
+        return SelectedProduct.query.filter_by(
+            session_id=session_id, buyer_clerk_user_id=buyer_id,
+            status=SelectionStatus.SELECTED,
+        ).count()
+    except Exception:  # noqa: BLE001 — suggestions are a nicety, never fail a turn
+        return 0
 
 
 def _persist_assistant_reply(session, text: str, cards: list[dict], suggestions: list[str] | None, prepared_checkout=None, tool_activity=None):
@@ -1108,6 +1228,53 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
         return {"updated": True, "product_name": item.product_name_snapshot,
                 "quantity": item.quantity}
 
+    if name == "compare_products":
+        indexes = args.get("product_indexes") or []
+        chosen = []
+        for raw in indexes:
+            i = int(raw) - 1
+            if 0 <= i < len(last_shown_cards):
+                chosen.append(last_shown_cards[i])
+        if len(chosen) < 2:
+            return {"error": "I need at least two products from the list to compare."}
+
+        rows = []
+        for card in chosen:
+            # Re-read each one so a comparison is never made on stale prices.
+            fresh = None
+            try:
+                fresh = catalog_client.get_product(card["product_id"])
+            except catalog_client.CatalogError:
+                fresh = None
+            source = _to_card(fresh) if fresh else card
+            if fresh:
+                collected_cards[fresh["product_id"]] = source
+
+            variants = source.get("variants") or []
+            in_stock = [v for v in variants if v.get("availability") == "IN_STOCK"]
+            prices = [v["price"]["amount"] for v in variants if v.get("price")]
+            rows.append({
+                "name": source.get("name"),
+                "brand": source.get("brand"),
+                "category": source.get("category"),
+                "price_from": min(prices) if prices else None,
+                "price_to": max(prices) if prices else None,
+                "currency": (source.get("price") or {}).get("currency", "INR"),
+                "in_stock": bool(in_stock),
+                "stock_total": sum(v.get("stock_quantity") or 0 for v in in_stock),
+                "options": [v.get("name") for v in variants],
+                "description": (source.get("description") or "")[:220] or None,
+            })
+
+        priced = [r for r in rows if r["price_from"] is not None]
+        cheapest = min(priced, key=lambda r: r["price_from"])["name"] if priced else None
+        return {
+            "products": rows,
+            "cheapest": cheapest,
+            "note": ("Compare only these fields. If the buyer asks about something "
+                     "not listed here, say the catalog doesn't specify it."),
+        }
+
     if name == "list_categories":
         try:
             categories = catalog_client.list_categories()
@@ -1364,6 +1531,9 @@ def stream_agent_turn(session, user_message_text: str):
 
     last_shown_cards = _get_last_shown_cards(session)
     grounding = _format_grounding_context(last_shown_cards)
+    category_context = _category_context()
+    if category_context:
+        grounding = f"{category_context}\n\n{grounding}" if grounding else category_context
     order_context = _format_order_context(session)
     if order_context:
         grounding = f"{order_context}\n\n{grounding}" if grounding else order_context
@@ -1429,6 +1599,9 @@ def stream_agent_turn(session, user_message_text: str):
                 had_details=had_details,
                 comparison_intent=comparison_intent,
                 is_first_turn=is_first_turn,
+                cart_count=_cart_count(buyer_id, session.id),
+                prepared=bool(checkout_ready),
+                categories=_CATEGORY_CACHE.get("names"),
             )
             yield from _emit_final(
                 session,
@@ -1500,7 +1673,7 @@ def stream_agent_turn(session, user_message_text: str):
                                     "prepare_checkout", "recommend_related",
                                     "list_addresses", "set_delivery_address", "add_address",
                                     "cancel_order", "reorder", "update_cart_quantity",
-                                    "list_categories", "get_receipt"):
+                                    "list_categories", "get_receipt", "compare_products"):
                     yield {
                         "type": "tool_end",
                         "tool": tc["name"],
