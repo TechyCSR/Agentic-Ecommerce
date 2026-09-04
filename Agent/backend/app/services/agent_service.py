@@ -300,7 +300,13 @@ ADD_TO_CART_TOOL = {
             "say things like 'I'll take it', 'add the second one', 'buy that'. "
             "Adding to a cart costs nothing and charges nothing — it only "
             "reserves the buyer's intent. Never call it speculatively; only "
-            "when the buyer has actually picked something."
+            "when the buyer has actually picked something. "
+            "This ADDS to whatever is already in the cart for that item. To "
+            "*change* a quantity for something already in the cart ('make it "
+            "14', 'just 2 instead'), use update_cart_quantity — calling this "
+            "would stack on top of the existing count instead of replacing it. "
+            "Quantities above what is in stock are trimmed to what's available "
+            "and the result says so; report that number, never the one asked for."
         ),
         "parameters": {
             "type": "object",
@@ -515,9 +521,11 @@ UPDATE_CART_TOOL = {
     "function": {
         "name": "update_cart_quantity",
         "description": (
-            "Change how many of a cart item the buyer wants ('make it 2', "
-            "'just one of those'). Stock is re-checked, so an impossible "
-            "quantity is refused with a reason."
+            "Set how many of a cart item the buyer wants ('make it 2', 'just "
+            "one of those'). This REPLACES the current quantity rather than "
+            "adding to it. Stock is re-checked: a quantity above what's "
+            "available is trimmed to the maximum and the result says so, so "
+            "report the number that came back, not the one requested."
         ),
         "parameters": {
             "type": "object",
@@ -1061,13 +1069,29 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                 )
             except Exception as exc:  # noqa: BLE001 — service messages are buyer-safe
                 return {"error": getattr(exc, "message", None) or "Couldn't add that to the cart."}
-            return {
+            result = {
                 "added": True,
                 "product_name": item.product_name_snapshot,
                 "variant_name": item.variant_name_snapshot,
                 "quantity": item.quantity,
                 "unit_price": {"amount": item.price_amount_snapshot, "currency": item.currency_snapshot},
             }
+            if getattr(item, "stock_limited", False):
+                # The cart was trimmed to what is actually buyable. Saying so
+                # is not optional — the buyer asked for a number they didn't get.
+                result.update(
+                    {
+                        "requested_quantity": item.requested_quantity,
+                        "available_stock": item.available_stock,
+                        "note": (
+                            f"Only {item.available_stock} are available, so the cart "
+                            f"holds {item.quantity} rather than the "
+                            f"{item.requested_quantity} requested. Tell the buyer this "
+                            "plainly and do not claim the full amount was added."
+                        ),
+                    }
+                )
+            return result
 
         if name == "view_cart":
             cart = selection_service.get_cart(buyer_id, session.id)
@@ -1245,8 +1269,21 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             )
         except Exception as exc:  # noqa: BLE001 — stock messages are buyer-safe
             return {"error": getattr(exc, "message", None) or "Couldn't change that quantity."}
-        return {"updated": True, "product_name": item.product_name_snapshot,
-                "quantity": item.quantity}
+        result = {"updated": True, "product_name": item.product_name_snapshot,
+                  "quantity": item.quantity}
+        if getattr(item, "stock_limited", False):
+            result.update(
+                {
+                    "requested_quantity": item.requested_quantity,
+                    "available_stock": item.available_stock,
+                    "note": (
+                        f"Only {item.available_stock} are available, so the quantity is "
+                        f"{item.quantity}, not the {item.requested_quantity} requested. "
+                        "Say so rather than confirming the requested number."
+                    ),
+                }
+            )
+        return result
 
     if name == "compare_products":
         indexes = args.get("product_indexes") or []
@@ -1475,6 +1512,8 @@ def _record_activity(activity_log: list, tool: str, args: dict, result: dict):
         entry["detail"] = result.get("name")
     elif tool == "add_to_cart":
         entry["detail"] = f"{result.get('quantity')} × {result.get('product_name')}"
+        if result.get("available_stock") is not None:
+            entry["detail"] += f" (asked {result['requested_quantity']}, only {result['available_stock']} in stock)"
     elif tool == "view_cart":
         entry["detail"] = f"{len(result.get('items') or [])} item(s)"
     elif tool == "prepare_checkout":
