@@ -35,6 +35,13 @@ class Config:
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
     ADMIN_JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "dev-admin-jwt-secret")
 
+    # How long a checkout may hold stock before it lapses. Long enough for a
+    # buyer to finish paying, short enough that an abandoned cart doesn't
+    # strand inventory. Capped at 60 minutes in reservation_service.
+    STOCK_RESERVATION_TTL_MINUTES = int(
+        os.getenv("STOCK_RESERVATION_TTL_MINUTES", "15")
+    )
+
     # CORS
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 

@@ -26,7 +26,12 @@ from app.models.enums import (
     PaymentStatus,
     ProductStatus,
 )
-from app.services import audit_service, merchant_service, product_service
+from app.services import (
+    audit_service,
+    merchant_service,
+    product_service,
+    reservation_service,
+)
 from app.utils.exceptions import ForbiddenError, NotFoundError, ValidationError
 
 
@@ -154,6 +159,11 @@ def create_order_from_agent(payload: dict, api_client_id=None):
         )
         orders.append(order)
 
+    # The hold this order was protecting has now become a real decrement.
+    # Settling it in the same transaction is what stops the units being
+    # subtracted twice — once as "held", once as "sold".
+    consumed = reservation_service.consume(agent_order_id, commit=False)
+
     db.session.commit()
 
     for order in orders:
@@ -170,6 +180,7 @@ def create_order_from_agent(payload: dict, api_client_id=None):
                 "total_amount": order.total_amount,
                 "currency": order.currency,
                 "item_count": len(order.items),
+                "reservations_consumed": consumed,
             },
         )
 
@@ -185,6 +196,10 @@ def cancel_order_from_agent(agent_order_id: str, reason: str = None, api_client_
     """
     orders = get_by_agent_order_id(agent_order_id)
     if not orders:
+        # Nothing was ever placed, but a priced checkout may still be sitting
+        # on stock. Free it rather than making the next buyer wait out the TTL.
+        if reservation_service.release(agent_order_id, "ORDER_CANCELLED", api_client_id):
+            return []
         raise NotFoundError("Order not found", code="ORDER_NOT_FOUND")
 
     shipped = [o for o in orders if o.status in (OrderStatus.SHIPPED, OrderStatus.DELIVERED)]
