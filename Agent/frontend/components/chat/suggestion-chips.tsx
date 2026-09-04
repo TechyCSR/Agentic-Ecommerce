@@ -19,7 +19,7 @@ export function SuggestionChips({
           type="button"
           disabled={disabled}
           onClick={() => onPick(s)}
-          className="rounded-full border bg-background px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+          className="rounded-md border bg-background px-2.5 py-1 text-xs text-muted-foreground transition-colors duration-100 hover:border-foreground/25 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
         >
           {s}
         </button>

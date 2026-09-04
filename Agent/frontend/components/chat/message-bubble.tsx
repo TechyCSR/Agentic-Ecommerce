@@ -30,8 +30,8 @@ function usefulSuggestions(suggestions: string[] | null | undefined): string[] {
 
 function AssistantAvatar() {
   return (
-    <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-      <Sparkles className="size-3.5" />
+    <div className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+      <Sparkles className="size-3" />
     </div>
   );
 }
@@ -56,8 +56,8 @@ export function UserMessage({
   }
 
   return (
-    <div className="group animate-in fade-in slide-in-from-bottom-2 flex flex-col items-end gap-1 duration-300">
-      <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm whitespace-pre-wrap text-primary-foreground shadow-sm">
+    <div className="group animate-in fade-in slide-in-from-bottom-1 flex flex-col items-end gap-1 duration-200">
+      <div className="max-w-[85%] rounded-lg rounded-br-sm bg-primary px-3.5 py-2 text-sm whitespace-pre-wrap text-primary-foreground">
         {content}
       </div>
       {createdAt && (
@@ -106,7 +106,7 @@ function UserMessageEditor({
 
   return (
     <div className="animate-in fade-in flex flex-col items-end gap-2 duration-200">
-      <div className="w-full max-w-[85%] rounded-2xl rounded-br-md border border-primary/40 bg-primary/5 p-2 shadow-sm">
+      <div className="w-full max-w-[85%] rounded-lg rounded-br-sm border border-primary/40 bg-primary/[0.06] p-2">
         <textarea
           ref={fit}
           autoFocus
@@ -187,7 +187,7 @@ export function MessageBubble({
   }
 
   return (
-    <div className="group animate-in fade-in slide-in-from-bottom-2 flex gap-3 duration-300">
+    <div className="group animate-in fade-in slide-in-from-bottom-1 flex gap-3 duration-200">
       <AssistantAvatar />
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         <MarkdownContent content={message.content} />
@@ -243,7 +243,7 @@ export function LiveAssistantBubble({
   selectedProductIds?: Set<string>;
 }) {
   return (
-    <div className="animate-in fade-in flex gap-3 duration-300">
+    <div className="animate-in fade-in flex gap-3 duration-200">
       <AssistantAvatar />
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         <AgentActivity steps={activity} />
@@ -279,10 +279,10 @@ export function ErrorBubble({
   isRetrying: boolean;
 }) {
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-2 flex gap-3 duration-300">
+    <div className="animate-in fade-in slide-in-from-bottom-1 flex gap-3 duration-200">
       <AssistantAvatar />
       <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
-        <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3.5 py-2.5 text-sm">
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5 text-sm">
           <p>I couldn&apos;t complete that right now.</p>
           <p className="mt-0.5 text-xs text-muted-foreground">{message}</p>
         </div>

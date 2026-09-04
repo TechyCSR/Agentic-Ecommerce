@@ -68,7 +68,7 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
       <button
         type="button"
         onClick={() => setDismissed(false)}
-        className="w-fit rounded-full border bg-card/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        className="w-fit rounded-md border bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors duration-100 hover:border-foreground/25 hover:text-foreground"
       >
         <Clock className="mr-1 inline size-3" />
         Saved for later — {formatMoney(checkout.amount, checkout.currency)} · pay now
@@ -78,7 +78,7 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
 
   return (
     <>
-      <div className="rounded-xl border bg-card/60 p-4 backdrop-blur-sm">
+      <div className="rounded-lg border bg-card p-3.5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="text-sm font-medium">

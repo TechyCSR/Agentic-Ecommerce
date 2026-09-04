@@ -55,13 +55,13 @@ function ActivityRow({ step }: { step: ActivityStep }) {
   const expandable = rows.length > 0 || step.resultCount !== undefined;
 
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-1 duration-300">
+    <div className="animate-in fade-in duration-200">
       <button
         type="button"
         disabled={!expandable}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "group flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs transition-colors",
+          "group flex w-full items-center gap-2 rounded-sm px-1.5 py-1 text-left font-mono text-[11px] transition-colors duration-100",
           expandable && "hover:bg-muted/60",
           !expandable && "cursor-default"
         )}
@@ -92,7 +92,7 @@ function ActivityRow({ step }: { step: ActivityStep }) {
       </button>
 
       {open && rows.length > 0 && (
-        <dl className="animate-in fade-in slide-in-from-top-1 mt-1 ml-7 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-l pl-3 text-xs duration-200">
+        <dl className="animate-in fade-in mt-1 ml-7 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-l pl-3 font-mono text-[11px] duration-150">
           {rows.map(([label, value]) => (
             <div key={label} className="contents">
               <dt className="text-muted-foreground">{label}</dt>
@@ -117,7 +117,7 @@ export function AgentActivity({ steps }: { steps: ActivityStep[] }) {
   if (steps.length === 0) return null;
 
   return (
-    <div className="w-fit min-w-56 max-w-full space-y-0.5 rounded-xl border bg-muted/30 p-1.5 backdrop-blur-sm">
+    <div className="w-fit min-w-56 max-w-full space-y-0.5 rounded-md border bg-muted/40 p-1.5">
       {steps.map((step) => (
         <ActivityRow key={step.id} step={step} />
       ))}

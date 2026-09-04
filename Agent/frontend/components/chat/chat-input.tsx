@@ -32,8 +32,8 @@ export function ChatInput({
   }
 
   return (
-    <div className="bg-gradient-to-t from-background via-background to-transparent px-3 pb-3 md:px-6 md:pb-4">
-      <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[1.75rem] border bg-card/80 p-1.5 pl-4 shadow-lg backdrop-blur-md transition-all duration-200 focus-within:border-foreground/25 focus-within:shadow-xl">
+    <div className="border-t bg-background px-3 py-3 md:px-6">
+      <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-lg border bg-card p-1.5 pl-3 transition-colors duration-150 focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/20">
         <Textarea
           ref={textareaRef}
           value={value}
@@ -52,7 +52,7 @@ export function ChatInput({
           <Button
             size="icon"
             variant="secondary"
-            className="size-9 shrink-0 rounded-full"
+            className="size-8 shrink-0 rounded-md"
             onClick={onStop}
             aria-label="Stop generating"
           >
@@ -61,7 +61,7 @@ export function ChatInput({
         ) : (
           <Button
             size="icon"
-            className="size-9 shrink-0 rounded-full transition-transform active:scale-95"
+            className="size-8 shrink-0 rounded-md transition-transform duration-100 active:scale-95"
             onClick={handleSend}
             disabled={!value.trim()}
             aria-label="Send message"
@@ -70,7 +70,7 @@ export function ChatInput({
           </Button>
         )}
       </div>
-      <p className="mt-2 text-center text-[11px] text-muted-foreground">
+      <p className="mt-2 text-center text-[11px] text-muted-foreground/80">
         Product details come from the live catalog — the agent never invents one.
       </p>
     </div>

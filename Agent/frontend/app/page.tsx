@@ -155,7 +155,7 @@ export default function ChatPage() {
           <AgentHeader isWorking={stream.isStreaming} rightSlot={cartSlot} />
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="scrollbar-thin flex-1 overflow-y-auto">
           {showEmptyState ? (
             <EmptyState onPick={handleSend} />
           ) : (

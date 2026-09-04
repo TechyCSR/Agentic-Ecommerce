@@ -31,9 +31,9 @@ export function ProductCardView({
     <>
       <div
         className={cn(
-          "group flex w-[13.5rem] shrink-0 snap-start flex-col overflow-hidden rounded-xl border bg-card transition-all duration-200",
-          "hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-lg",
-          isSelected && "border-primary/60 ring-1 ring-primary/30"
+          "group flex w-[13.5rem] shrink-0 snap-start flex-col overflow-hidden rounded-lg border bg-card transition-colors duration-150",
+          "hover:border-foreground/25",
+          isSelected && "border-primary/60 ring-1 ring-primary/25"
         )}
       >
         <button
@@ -45,7 +45,7 @@ export function ProductCardView({
           <ProductImage
             src={product.image_url}
             alt={product.name}
-            className="transition-transform duration-300 group-hover:scale-[1.03]"
+            className="transition-transform duration-200 group-hover:scale-[1.02]"
           />
         </button>
 
@@ -55,7 +55,7 @@ export function ProductCardView({
           </div>
 
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-base font-semibold">
+            <span className="text-[15px] font-semibold tabular-nums">
               {defaultVariant?.price
                 ? formatMoney(defaultVariant.price.amount, defaultVariant.price.currency)
                 : "—"}

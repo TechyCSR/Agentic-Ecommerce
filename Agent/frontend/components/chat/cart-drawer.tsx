@@ -81,7 +81,7 @@ function CartLine({ sessionId, item }: { sessionId: string; item: CartItem }) {
 
   return (
     <div className="flex gap-3 border-b py-3 last:border-b-0">
-      <div className="relative size-14 shrink-0 overflow-hidden rounded-md bg-muted">
+      <div className="relative size-14 shrink-0 overflow-hidden rounded-md border bg-muted">
         {item.image_url ? (
           <Image src={item.image_url} alt={item.product_name} fill unoptimized className="object-cover" />
         ) : (
@@ -111,11 +111,11 @@ function CartLine({ sessionId, item }: { sessionId: string; item: CartItem }) {
           </Button>
         </div>
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1 rounded-full border">
+          <div className="flex items-center rounded-md border">
             <Button
               variant="ghost"
               size="icon-sm"
-              className="size-6 rounded-full"
+              className="size-6 rounded-sm"
               disabled={busy || item.quantity <= 1}
               onClick={() => changeQty(item.quantity - 1)}
             >
@@ -146,7 +146,7 @@ function CartLine({ sessionId, item }: { sessionId: string; item: CartItem }) {
             <Button
               variant="ghost"
               size="icon-sm"
-              className="size-6 rounded-full"
+              className="size-6 rounded-sm"
               disabled={busy || item.quantity >= MAX_QTY_INPUT}
               onClick={() => changeQty(item.quantity + 1)}
             >
