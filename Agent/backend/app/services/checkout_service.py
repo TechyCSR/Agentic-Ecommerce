@@ -343,13 +343,24 @@ def sync_order_to_merchant(order: Order) -> bool:
     try:
         data = catalog_client.create_order(payload)
     except Exception as exc:  # noqa: BLE001 — a paid order must never be rolled back by a sync failure
+        permanent = getattr(exc, "is_permanent", False)
         audit_service.log_event(
             action="MERCHANT_SYNC_FAILED",
             resource_id=order.id,
             session_id=order.session_id,
             buyer_clerk_user_id=order.buyer_clerk_user_id,
-            metadata={"order_id": str(order.id), "error": str(exc)[:500]},
+            metadata={
+                "order_id": str(order.id),
+                "error": str(exc)[:500],
+                "code": getattr(exc, "code", None),
+                "permanent": permanent,
+            },
         )
+        if permanent:
+            # The goods went to someone else between checkout and payment.
+            # Retrying can never succeed, so leaving this "confirmed" would
+            # mean a buyer charged for something they cannot receive.
+            _refund_unfulfillable_order(order, str(exc))
         return False
 
     order.merchant_order_ids = [o["id"] for o in data.get("orders", [])]
@@ -368,6 +379,72 @@ def sync_order_to_merchant(order: Order) -> bool:
         },
     )
     return True
+
+
+def _refund_unfulfillable_order(order: Order, reason: str) -> None:
+    """Money back when the merchant can't fulfil what was paid for.
+
+    The buyer has already been charged at this point, so the only honest
+    outcome is to cancel, refund and say so. Bounded like every refund: the
+    amount comes from the stored payment.
+    """
+    from app.services import payment_service
+
+    order.status = OrderStatus.CANCELLED
+    db.session.commit()
+
+    audit_service.log_event(
+        action="ORDER_UNFULFILLABLE",
+        resource_id=order.id,
+        session_id=order.session_id,
+        buyer_clerk_user_id=order.buyer_clerk_user_id,
+        metadata={
+            "order_id": str(order.id),
+            "amount": order.amount_total,
+            "currency": order.currency,
+            "reason": reason[:300],
+        },
+    )
+
+    payment = next((p for p in order.payments if p.status == PaymentStatus.PAID), None)
+    refunded, message = (
+        payment_service.refund_payment(order, payment, "merchant_could_not_fulfil")
+        if payment
+        else (False, "No payment had been captured.")
+    )
+
+    _notify_unfulfillable(order, reason, refunded, message)
+
+
+def _notify_unfulfillable(order: Order, reason: str, refunded: bool, message: str) -> None:
+    """Tells the buyer in their own chat, rather than leaving a confirmation
+    on screen for an order that can't ship."""
+    if not order.session_id:
+        return
+    try:
+        from app.models import ChatMessage
+        from app.models.enums import MessageRole
+
+        symbol = "₹" if order.currency == "INR" else f"{order.currency} "
+        text = (
+            "⚠️ **Your order couldn't be completed.**\n\n"
+            f"{reason}\n\n"
+            f"- **Order:** `{order.id}`\n"
+            f"- **Amount:** {symbol}{order.amount_total / 100:,.0f}\n"
+            f"- **Status:** CANCELLED\n\n"
+            + ("Your payment has been refunded in full." if refunded else message)
+        )
+        db.session.add(
+            ChatMessage(
+                session_id=order.session_id,
+                role=MessageRole.ASSISTANT,
+                content=text,
+                suggested_replies=["Find something similar", "Show my orders"],
+            )
+        )
+        db.session.commit()
+    except Exception:  # noqa: BLE001 — a chat write must never affect a refund
+        db.session.rollback()
 
 
 def get_fulfillment_status(order: Order) -> str | None:

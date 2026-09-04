@@ -22,9 +22,26 @@ class MerchantSyncError(Exception):
     """Raised when registering an order with the Merchant service fails.
 
     Kept distinct from CatalogError because the caller treats it very
-    differently: by sync time the buyer has already paid, so this must never
-    unwind the order — only be recorded and retried.
+    differently: by sync time the buyer has already paid.
+
+    `code` separates the two cases that matter. A transient failure (merchant
+    down, timeout) is retryable and the order stands. A permanent one —
+    the goods sold out between checkout and payment — can never succeed, so
+    retrying forever would leave someone charged for something they can't
+    receive.
     """
+
+    # Merchant-side reasons that will never succeed on retry.
+    PERMANENT_CODES = {"INSUFFICIENT_STOCK", "PRODUCT_NOT_AVAILABLE", "VARIANT_NOT_FOUND"}
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+    @property
+    def is_permanent(self) -> bool:
+        return self.code in self.PERMANENT_CODES
 
 
 def _headers():
@@ -122,14 +139,16 @@ def create_order(payload: dict) -> dict:
     except requests.RequestException as exc:
         raise MerchantSyncError(f"Order sync request failed: {exc}") from exc
 
-    if resp.status_code not in (200, 201):
-        raise MerchantSyncError(
-            f"Order sync failed with status {resp.status_code}: {resp.text[:200]}"
-        )
+    body = resp.json() if resp.content else {}
+    error = body.get("error") or {}
 
-    body = resp.json()
-    if not body.get("success"):
-        raise MerchantSyncError(body.get("error", {}).get("message", "Order sync failed"))
+    if resp.status_code not in (200, 201) or not body.get("success"):
+        # Carry the merchant's own error code through: the caller needs to
+        # tell "sold out, refund them" apart from "try again later".
+        raise MerchantSyncError(
+            error.get("message") or f"Order sync failed with status {resp.status_code}",
+            code=error.get("code"),
+        )
 
     return body["data"]
 
