@@ -119,14 +119,24 @@ def create_order_from_agent(payload: dict, api_client_id=None):
                 )
             )
 
-            product_service.adjust_stock_internal(
-                variant,
-                -quantity,
-                reason="ORDER_PLACED",
-                reference_type="ORDER",
-                reference_id=order.id,
-                commit=False,
-            )
+            try:
+                product_service.adjust_stock_internal(
+                    variant,
+                    -quantity,
+                    reason="ORDER_PLACED",
+                    reference_type="ORDER",
+                    reference_id=order.id,
+                    commit=False,
+                )
+            except ValidationError as exc:
+                # The last unit went to someone else between checkout and
+                # payment. Say so distinctly: the caller has already charged
+                # this buyer and must refund rather than retry forever.
+                db.session.rollback()
+                raise ValidationError(
+                    f"'{product.name}' sold out before this order could be placed.",
+                    code="INSUFFICIENT_STOCK",
+                ) from exc
 
         order.subtotal_amount = subtotal
         order.total_amount = subtotal
