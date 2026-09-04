@@ -59,6 +59,11 @@ def authorize_and_create_payment(buyer_id: str, order_id, is_retry: bool = False
     if existing and existing.status == PaymentStatus.PAID:
         raise ValidationError("This order is already paid.", code="ORDER_ALREADY_CONFIRMED")
 
+    # The stock hold taken when this order was priced may have lapsed while
+    # the buyer was deciding. Re-taking it here means "it sold out" costs a
+    # message, not a charge and a refund.
+    checkout_service.ensure_stock_hold(buyer_id, order)
+
     if is_retry:
         audit_service.log_event(
             action="PAYMENT_RETRY_REQUESTED",

@@ -1104,12 +1104,19 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
         except Exception as exc:  # noqa: BLE001 — validation messages are buyer-safe
             return {"error": getattr(exc, "message", None) or "Couldn't prepare the checkout."}
 
+        hold_seconds = checkout_service.stock_hold_seconds_left(order)
         checkout_ready.append(
             {
                 "order_id": str(order.id),
                 "amount": order.amount_total,
                 "currency": order.currency,
                 "items": order.items or [],
+                "stock_reserved_until": (
+                    order.stock_reserved_until.isoformat()
+                    if order.stock_reserved_until
+                    else None
+                ),
+                "stock_hold_seconds": hold_seconds,
             }
         )
         return {
@@ -1121,10 +1128,18 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
                 for i in (order.items or [])
             ],
             "payment_status": "NOT_PAID",
+            "stock_held_for_minutes": round(hold_seconds / 60) if hold_seconds else None,
             "next_step": (
                 "Tell the buyer the total and that a Pay button is now shown. "
                 "They must press it themselves to authorize the payment. "
                 "Do not claim the payment has happened."
+                + (
+                    f" Their items are held for about {round(hold_seconds / 60)} "
+                    "minutes — mention it once, briefly, as reassurance rather "
+                    "than as pressure."
+                    if hold_seconds
+                    else ""
+                )
             ),
         }
 

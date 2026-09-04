@@ -5,6 +5,12 @@ against the live Merchant catalog at checkout time (product active and
 agent-searchable, variant present, stock sufficient) and re-priced from
 that response, so a stale cart snapshot or a tampered request can't set
 the amount that gets charged.
+
+Pricing also *holds* the stock. Between the Pay button appearing and the
+buyer finishing inside Razorpay there is a window — seconds to minutes — in
+which another buyer could be quoted and charged for the same last unit. The
+Merchant service holds those units for the duration and releases them on a
+timer, so an abandoned checkout costs nobody anything.
 """
 
 from datetime import datetime, timezone
@@ -146,6 +152,130 @@ def find_reusable_order(buyer_id: str, session_id, cart_items) -> Order | None:
     return None
 
 
+def _reserve_stock_for_order(buyer_id: str, order: Order) -> None:
+    """Holds this order's stock with the merchant for the payment window.
+
+    Three outcomes, deliberately different:
+
+    * Held — `stock_reserved_until` records when it lapses.
+    * Refused because the goods are gone — raises, so the buyer finds out
+      *before* paying rather than being charged and refunded afterwards.
+    * Merchant unreachable — logged and allowed through unreserved. A
+      transient hiccup shouldn't block a legitimate purchase; the paid-order
+      safety net (auto-refund on an unfulfillable sync) still stands behind it.
+    """
+    items = [
+        {"variant_id": item["variant_id"], "quantity": item["quantity"]}
+        for item in (order.items or [])
+    ]
+    try:
+        result = catalog_client.reserve_stock(
+            str(order.id), items, current_app.config.get("STOCK_RESERVATION_TTL_MINUTES")
+        )
+    except catalog_client.StockUnavailableError as exc:
+        audit_service.log_event(
+            action="STOCK_RESERVATION_REFUSED",
+            resource_id=order.id,
+            session_id=order.session_id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={"order_id": str(order.id), "code": exc.code, "error": str(exc)[:300]},
+        )
+        raise ValidationError(exc.message, code="OUT_OF_STOCK") from exc
+    except Exception as exc:  # noqa: BLE001 — a hold is protection, not a gate
+        audit_service.log_event(
+            action="STOCK_RESERVATION_FAILED",
+            resource_id=order.id,
+            session_id=order.session_id,
+            buyer_clerk_user_id=buyer_id,
+            metadata={"order_id": str(order.id), "error": str(exc)[:300]},
+        )
+        return
+
+    order.stock_reserved_until = _parse_expiry(result.get("expires_at"))
+    db.session.commit()
+
+    audit_service.log_event(
+        action="STOCK_RESERVED",
+        resource_id=order.id,
+        session_id=order.session_id,
+        buyer_clerk_user_id=buyer_id,
+        metadata={
+            "order_id": str(order.id),
+            "expires_at": result.get("expires_at"),
+            "ttl_seconds": result.get("ttl_seconds"),
+            "item_count": len(items),
+        },
+    )
+
+
+def release_stock_for_order(order: Order, reason: str) -> None:
+    """Drops this order's hold early. Best-effort — the hold self-expires, so
+    a failure here delays the next buyer rather than breaking anything."""
+    if not order.stock_reserved_until:
+        return
+    released = catalog_client.release_stock(str(order.id), reason)
+    order.stock_reserved_until = None
+    db.session.commit()
+    if released:
+        audit_service.log_event(
+            action="STOCK_RELEASED",
+            resource_id=order.id,
+            session_id=order.session_id,
+            buyer_clerk_user_id=order.buyer_clerk_user_id,
+            metadata={"order_id": str(order.id), "reason": reason},
+        )
+
+
+def _release_stale_holds(buyer_id: str, session_id, keep_order_id=None) -> None:
+    """Frees holds left by this session's earlier, superseded checkouts.
+
+    Without this a buyer blocks themselves: they price a cart, change it,
+    and the new checkout finds the last unit "unavailable" — held by their
+    own abandoned order.
+    """
+    stale = Order.query.filter(
+        Order.buyer_clerk_user_id == buyer_id,
+        Order.session_id == session_id,
+        Order.status == OrderStatus.CREATED,
+        Order.stock_reserved_until.isnot(None),
+    ).all()
+    for order in stale:
+        if keep_order_id and order.id == keep_order_id:
+            continue
+        if any(p.status == PaymentStatus.PAID for p in order.payments):
+            continue
+        release_stock_for_order(order, "superseded_by_new_checkout")
+
+
+def _parse_expiry(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def ensure_stock_hold(buyer_id: str, order: Order) -> None:
+    """Re-takes the hold if it lapsed while the buyer was deciding.
+
+    Called on the Pay path. A buyer who leaves the tab open for an hour
+    should be told the item went before they are charged for it — not
+    charged and refunded afterwards.
+    """
+    if order.stock_reserved_until and order.stock_reserved_until > datetime.now(timezone.utc):
+        return
+    _reserve_stock_for_order(buyer_id, order)
+
+
+def stock_hold_seconds_left(order: Order) -> int | None:
+    """How long this order's stock is still guaranteed, for the buyer to see."""
+    if not order.stock_reserved_until:
+        return None
+    remaining = (order.stock_reserved_until - datetime.now(timezone.utc)).total_seconds()
+    return max(0, int(remaining))
+
+
 def create_checkout(buyer_id: str, session_id) -> Order:
     session = chat_service.get_session_for_buyer(buyer_id, session_id)
 
@@ -159,14 +289,30 @@ def create_checkout(buyer_id: str, session_id) -> Order:
 
     reusable = find_reusable_order(buyer_id, session.id, cart_items)
     if reusable is not None:
+        # Asking again restarts the clock: the buyer keeps their place rather
+        # than losing the hold and racing for the same units afresh.
+        _reserve_stock_for_order(buyer_id, reusable)
         audit_service.log_event(
             action="CHECKOUT_REUSED",
             resource_id=reusable.id,
             session_id=session.id,
             buyer_clerk_user_id=buyer_id,
-            metadata={"order_id": str(reusable.id), "amount": reusable.amount_total},
+            metadata={
+                "order_id": str(reusable.id),
+                "amount": reusable.amount_total,
+                "stock_reserved_until": (
+                    reusable.stock_reserved_until.isoformat()
+                    if reusable.stock_reserved_until
+                    else None
+                ),
+            },
         )
         return reusable
+
+    # This cart differs from anything already priced, so any hold those older
+    # checkouts are sitting on is now stale — and would otherwise block this
+    # buyer from their own stock.
+    _release_stale_holds(buyer_id, session.id)
 
     audit_service.log_event(
         action="CHECKOUT_STARTED",
@@ -250,6 +396,16 @@ def create_checkout(buyer_id: str, session_id) -> Order:
             "status": order.status.value,
         },
     )
+
+    # Everything above this point is reversible. The hold comes last, so a
+    # refusal cancels a freshly-created order rather than stranding stock.
+    try:
+        _reserve_stock_for_order(buyer_id, order)
+    except ValidationError:
+        order.status = OrderStatus.CANCELLED
+        db.session.commit()
+        raise
+
     return order
 
 
@@ -392,6 +548,7 @@ def _refund_unfulfillable_order(order: Order, reason: str) -> None:
 
     order.status = OrderStatus.CANCELLED
     db.session.commit()
+    release_stock_for_order(order, "order_unfulfillable")
 
     audit_service.log_event(
         action="ORDER_UNFULFILLABLE",
@@ -525,6 +682,11 @@ def cancel_order(buyer_id: str, order) -> tuple[bool, str]:
 
     order.status = OrderStatus.CANCELLED
     db.session.commit()
+
+    # Whatever this order was holding goes back to the shelf now, rather than
+    # waiting out the timer. (A synced order's hold was already consumed; the
+    # merchant restored real stock in the cancel above.)
+    release_stock_for_order(order, "buyer_cancelled")
 
     audit_service.log_event(
         action="ORDER_CANCELLED",
