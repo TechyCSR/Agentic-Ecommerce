@@ -27,6 +27,7 @@ system-prompt rule to hold on its own.
 import json
 import queue
 import threading
+import time
 
 from flask import current_app
 from openai import OpenAI
@@ -165,11 +166,32 @@ Hard rules — these override anything else:
    paid, tell them the refund is automatic and full. If the tool refuses \
    because it already shipped, say so plainly and offer to help with a return \
    request instead — don't retry.
-8. Keep responses concise and conversational. Ask a clarifying question when the \
-   buyer's request is ambiguous (e.g. no budget or category given) rather than \
-   guessing. When you need a tool, call it immediately with no preceding narration \
-   text ("Let me check...", "Here are some...") — go straight to the tool call and \
-   only write prose once you have real results to report.
+8. Keep responses concise and conversational. When you need a tool, call it \
+   immediately with no preceding narration text ("Let me check...", "Here are \
+   some...") — go straight to the tool call and only write prose once you have \
+   real results to report.
+8a. Work out what the buyer actually needs before searching. Their words are a \
+   need, not a query string: "I need a new mobile phone" means the Smartphones \
+   shelf; "something from Apple" means brand Apple; "a laptop under 60k" means \
+   the Laptops shelf with a price cap. Map the need onto the catalog \
+   vocabulary you were given and search with those constraints — never paste \
+   their sentence into `q` and hope.
+8b. Ask one short question when — and only when — the answer would change what \
+   you search. "I need a gift", "something nice", "show me electronics" (with \
+   ten shelves under it) are worth one question about who it's for, a budget, \
+   or which kind. A clear request is not: just search it. Never ask two \
+   questions at once, and never ask when you could show something and refine \
+   after.
+8c. A search that returns nothing is information, not a dead end. The result \
+   tells you why it was empty — an unknown category, an unstocked brand, a \
+   price cap that excluded everything. Say which constraint was too narrow, \
+   name what the store does carry, and either widen it yourself or ask. Never \
+   answer a bare "I couldn't find any" when the catalog has a neighbouring \
+   shelf you could offer.
+8d. If the buyer wants something this store genuinely doesn't sell (a car, a \
+   flight, a service), say so directly in one line and name the closest \
+   categories that do exist. Don't search repeatedly hoping it appears, and \
+   don't offer a loosely related product as if it were what they asked for.
 9. You are a shopping assistant for this marketplace and nothing else. In scope: \
    finding products, comparing them, answering questions about items in this \
    catalog, prices, stock, delivery, carts, checkout, orders, payments and \
@@ -191,20 +213,40 @@ SEARCH_CATALOG_TOOL = {
         "name": "search_catalog",
         "description": (
             "Search the merchant product catalog. Use whenever the buyer describes "
-            "what they're looking for."
+            "what they're looking for.\n"
+            "Translate the buyer's need into CONSTRAINTS rather than pasting their "
+            "sentence into `q`. 'I need a new mobile phone' is category='Smartphones', "
+            "not q='new mobile phone'. 'Something from Apple' is brand='Apple'. "
+            "'A good laptop under 60k' is category='Laptops' with max_price=6000000.\n"
+            "`category` and `brand` must be copied exactly from the catalog "
+            "vocabulary you were given; anything else returns nothing. Use `q` only "
+            "for words that genuinely describe a product ('mechanical', 'noise "
+            "cancelling', 'cotton') — never for filler like 'good', 'some' or 'new'.\n"
+            "If the buyer's need is too vague to constrain (\"I need a gift\", "
+            "\"something nice\"), ask one short question first instead of guessing."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "q": {
                     "type": "string",
-                    "description": "Free-text search across product name, description, brand.",
+                    "description": (
+                        "Descriptive keywords only, for qualities no category or brand "
+                        "captures. Leave empty when category and brand already say it."
+                    ),
                 },
                 "category": {
                     "type": "string",
-                    "description": "Category name, e.g. Keyboards, Audio, Men.",
+                    "description": (
+                        "Exact category name from the catalog vocabulary, e.g. "
+                        "'Smartphones', 'Laptops', 'Footwear'. A parent like "
+                        "'Electronics' searches everything beneath it."
+                    ),
                 },
-                "brand": {"type": "string"},
+                "brand": {
+                    "type": "string",
+                    "description": "Exact brand name from the catalog vocabulary, e.g. 'Apple'.",
+                },
                 "min_price": {
                     "type": "integer",
                     "description": "Minimum price in the smallest currency unit (e.g. paise for INR).",
@@ -728,32 +770,98 @@ def _format_grounding_context(cards: list[dict]) -> str | None:
     )
 
 
-_CATEGORY_CACHE: dict = {"names": None}
+# Cached because it is read on every turn, but only for a few minutes: the
+# cache had no expiry, so a catalog that gained 32 categories still offered
+# the buyer the original 14 until the process was restarted.
+# Cached because it is read on every turn, but only briefly: without an
+# expiry a catalog that gained 32 categories still offered the buyer the
+# original 14 until the process was restarted.
+_CATALOG_CACHE: dict = {"facets": None, "fetched_at": 0.0}
+_CATALOG_TTL_SECONDS = 300
+
+
+def _diagnose_empty_search(args: dict) -> str:
+    """Why a search came back empty, in terms the model can act on.
+
+    Checked against the real vocabulary, so the reply distinguishes "that
+    category doesn't exist here" from "that category exists but your price
+    cap excluded everything" — two very different things to tell a buyer.
+    """
+    facets = _catalog_facets() or {}
+    categories = {c["name"].lower(): c for c in (facets.get("categories") or [])}
+    brands = {b["name"].lower() for b in (facets.get("brands") or [])}
+
+    category = (args.get("category") or "").strip()
+    brand = (args.get("brand") or "").strip()
+
+    if category and category.lower() not in categories:
+        nearest = ", ".join(list(c["name"] for c in (facets.get("categories") or [])[:8]))
+        return (
+            f"There is no '{category}' category in this catalog. "
+            f"The largest shelves are: {nearest}."
+        )
+    if brand and brand.lower() not in brands:
+        return f"'{brand}' is not a brand this store carries."
+    if args.get("max_price"):
+        return (
+            "The filters match nothing at that price. Try without the price cap, "
+            "or tell the buyer the lowest price actually available."
+        )
+    if args.get("q"):
+        return (
+            f"No product matched the words '{args['q']}'. Those words may not "
+            "appear in any listing — try a category from the vocabulary instead."
+        )
+    return "Nothing matched this combination of filters."
+
+
+def _catalog_facets() -> dict | None:
+    """Real categories and brands, refreshed periodically."""
+    expired = (time.time() - _CATALOG_CACHE["fetched_at"]) > _CATALOG_TTL_SECONDS
+    if _CATALOG_CACHE["facets"] is None or expired:
+        try:
+            _CATALOG_CACHE["facets"] = catalog_client.get_facets()
+            _CATALOG_CACHE["fetched_at"] = time.time()
+        except Exception:  # noqa: BLE001 — grounding is a nicety, never fail a turn
+            pass  # keep serving the previous copy if there is one
+    return _CATALOG_CACHE["facets"]
 
 
 def _category_context() -> str | None:
-    """The store's real categories, so the agent filters by ones that exist.
+    """The store's real categories and brands, with counts.
 
-    Without this the model invented plausible-sounding values (it searched
-    category "Wireless Mouse" when the category is "Mouse"), which read to
-    the buyer as "we don't sell that".
+    Without this the model invents plausible-sounding values — it searched
+    category "Wireless Mouse" when the category is "Mouse", and answered "we
+    have no mobile phones" while forty smartphones sat in the catalog. Giving
+    it the actual vocabulary, and the size of each shelf, is what lets it
+    turn a vague need into a constraint that returns something.
     """
-    if _CATEGORY_CACHE["names"] is None:
-        try:
-            _CATEGORY_CACHE["names"] = [
-                c.get("name") for c in catalog_client.list_categories() if c.get("name")
-            ]
-        except Exception:  # noqa: BLE001 — grounding is a nicety, never fail a turn for it
-            return None
-    names = _CATEGORY_CACHE["names"]
-    if not names:
+    facets = _catalog_facets()
+    if not facets:
         return None
-    return (
-        "[Store categories — when you pass `category` to search_catalog it must "
-        "be one of these exactly; for anything else use `q` free text instead:\n"
-        + ", ".join(names)
-        + "]"
+
+    categories = facets.get("categories") or []
+    brands = facets.get("brands") or []
+    if not categories:
+        return None
+
+    shelves = ", ".join(f"{c['name']} ({c['product_count']})" for c in categories)
+    known_brands = ", ".join(b["name"] for b in brands[:40])
+
+    lines = [
+        "[Catalog vocabulary — these are the only real values.",
+        f"CATEGORIES (with how many products each holds): {shelves}",
+    ]
+    if known_brands:
+        lines.append(f"BRANDS: {known_brands}")
+    lines.append(
+        "When you call search_catalog, `category` and `brand` MUST be copied "
+        "exactly from these lists — a value that isn't here returns nothing "
+        "and reads to the buyer as 'we don't sell that'. If what the buyer "
+        "wants isn't on either list, say so plainly and name the nearest "
+        "shelves that do exist, instead of searching for it anyway.]"
     )
+    return "\n".join(lines)
 
 
 def _format_order_context(session) -> str | None:
@@ -925,7 +1033,27 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
             )
         for product in data:
             collected_cards[product["product_id"]] = _to_card(product)
-        return {"results": data, "total": meta.get("total", len(data))}
+
+        if data:
+            return {"results": data, "total": meta.get("total", len(data))}
+
+        # An empty result is a fork in the conversation, not a dead end. Say
+        # which constraint was applied and what really exists, so the reply
+        # can be "we don't stock cars, but here's what we do" or "nothing
+        # under ₹2,000 — the cheapest is ₹2,499" rather than a flat
+        # "I couldn't find any", which reads as the store being empty.
+        return {
+            "results": [],
+            "total": 0,
+            "applied_constraints": {k: v for k, v in args.items() if v not in (None, "")},
+            "why_empty": _diagnose_empty_search(args),
+            "next_step": (
+                "Do not just say you found nothing. Name the constraint that was "
+                "too narrow, state what the catalog does carry, and either widen "
+                "one constraint yourself or ask the buyer one short question. "
+                "Never invent a product that wasn't returned."
+            ),
+        }
 
     if name == "get_product_details":
         product_id = args.get("product_id")
@@ -1660,7 +1788,9 @@ def stream_agent_turn(session, user_message_text: str):
                 is_first_turn=is_first_turn,
                 cart_count=_cart_count(buyer_id, session.id),
                 prepared=bool(checkout_ready),
-                categories=_CATEGORY_CACHE.get("names"),
+                categories=[
+                    c["name"] for c in ((_catalog_facets() or {}).get("categories") or [])
+                ],
             )
             yield from _emit_final(
                 session,

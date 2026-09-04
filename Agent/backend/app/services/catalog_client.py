@@ -262,6 +262,24 @@ def cancel_merchant_order(agent_order_id: str, reason: str | None = None) -> dic
     return body["data"]
 
 
+def get_facets() -> dict:
+    """What the catalog actually contains: categories with live counts and
+    the brands worth naming. Used to ground the agent's search constraints in
+    values that exist."""
+    try:
+        resp = requests.get(
+            f"{_base_url()}/api/v1/agent/catalog/facets",
+            headers=_headers(),
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise CatalogError(f"Facet lookup failed: {exc}") from exc
+    if resp.status_code != 200:
+        raise CatalogError(f"Facet lookup failed with status {resp.status_code}")
+    body = resp.json()
+    return body.get("data") or {}
+
+
 def list_categories() -> list:
     """Category names, so the agent can answer "what do you sell?"."""
     try:
