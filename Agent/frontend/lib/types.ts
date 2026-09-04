@@ -91,6 +91,11 @@ export interface CartItem {
   line_total: Money;
   status: SelectionStatus;
   created_at: string;
+  /** Set only on the response to a write the server had to trim to
+   * available stock — never present on a plain cart read. */
+  stock_limited?: boolean;
+  requested_quantity?: number;
+  available_stock?: number;
 }
 
 export interface Cart {
