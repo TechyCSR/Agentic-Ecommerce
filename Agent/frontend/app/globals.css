@@ -49,72 +49,77 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* Neutrals carry a trace of blue rather than being dead grey — it keeps
+     large flat surfaces from looking muddy next to the indigo accent. */
+  --background: oklch(0.995 0.002 265);
+  --foreground: oklch(0.18 0.011 265);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.18 0.011 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.18 0.011 265);
+  /* One accent, used sparingly: the buyer's own messages, primary actions,
+     and focus. Everything else stays monochrome so it means something. */
+  --primary: oklch(0.53 0.183 274);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.968 0.004 265);
+  --secondary-foreground: oklch(0.22 0.012 265);
+  --muted: oklch(0.968 0.004 265);
+  --muted-foreground: oklch(0.52 0.014 265);
+  --accent: oklch(0.962 0.006 270);
+  --accent-foreground: oklch(0.22 0.012 265);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --border: oklch(0.912 0.005 265);
+  --input: oklch(0.912 0.005 265);
+  --ring: oklch(0.53 0.183 274);
+  --chart-1: oklch(0.53 0.183 274);
+  --chart-2: oklch(0.556 0.02 265);
+  --chart-3: oklch(0.439 0.018 265);
+  --chart-4: oklch(0.371 0.016 265);
+  --chart-5: oklch(0.269 0.014 265);
+  /* Tighter than the shadcn default: sharp corners read as precise. */
+  --radius: 0.5rem;
+  --sidebar: oklch(0.978 0.003 265);
+  --sidebar-foreground: oklch(0.18 0.011 265);
+  --sidebar-primary: oklch(0.53 0.183 274);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.955 0.006 270);
+  --sidebar-accent-foreground: oklch(0.22 0.012 265);
+  --sidebar-border: oklch(0.912 0.005 265);
+  --sidebar-ring: oklch(0.53 0.183 274);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --background: oklch(0.162 0.008 265);
+  --foreground: oklch(0.965 0.002 265);
+  --card: oklch(0.198 0.009 265);
+  --card-foreground: oklch(0.965 0.002 265);
+  --popover: oklch(0.205 0.009 265);
+  --popover-foreground: oklch(0.965 0.002 265);
+  --primary: oklch(0.625 0.176 274);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.258 0.011 265);
+  --secondary-foreground: oklch(0.965 0.002 265);
+  --muted: oklch(0.252 0.011 265);
+  --muted-foreground: oklch(0.685 0.013 265);
+  --accent: oklch(0.272 0.013 268);
+  --accent-foreground: oklch(0.965 0.002 265);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.625 0.176 274);
+  --chart-1: oklch(0.625 0.176 274);
+  --chart-2: oklch(0.6 0.02 265);
+  --chart-3: oklch(0.48 0.018 265);
+  --chart-4: oklch(0.4 0.016 265);
+  --chart-5: oklch(0.3 0.014 265);
+  --sidebar: oklch(0.182 0.009 265);
+  --sidebar-foreground: oklch(0.965 0.002 265);
+  --sidebar-primary: oklch(0.625 0.176 274);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.262 0.012 268);
+  --sidebar-accent-foreground: oklch(0.965 0.002 265);
+  --sidebar-border: oklch(1 0 0 / 9%);
+  --sidebar-ring: oklch(0.625 0.176 274);
 }
 
 @layer base {
@@ -123,8 +128,47 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Slightly negative tracking at body size is what makes dense UI text
+       read as sharp rather than airy. */
+    letter-spacing: -0.006em;
   }
   html {
     @apply font-sans;
+  }
+  /* Headings tighten further, the way display type wants to. */
+  h1, h2, h3, h4 {
+    letter-spacing: -0.021em;
+  }
+  /* Prices, quantities and counts should never shift width as they change. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+  ::selection {
+    background: color-mix(in oklch, var(--primary) 26%, transparent);
+  }
+}
+
+@layer utilities {
+  /* A thin, unobtrusive scrollbar — the default one is visually louder than
+     anything it scrolls past here. */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklch, var(--foreground) 16%, transparent);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklch, var(--foreground) 28%, transparent);
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
   }
 }
