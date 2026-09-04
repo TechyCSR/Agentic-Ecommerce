@@ -225,15 +225,14 @@ def verify_payment(
             code="PAYMENT_VERIFICATION_FAILED",
         )
 
-    _mark_paid_and_confirm(order, payment, provider_payment_id, source="browser")
+    if _mark_paid_and_confirm(order, payment, provider_payment_id, source="browser"):
+        checkout_service.clear_cart_for_order(order)
 
-    checkout_service.clear_cart_for_order(order)
-
-    # Tell the seller, and tell the buyer's own conversation. Both are
-    # best-effort on purpose — the payment is already verified and must stand
-    # regardless of what either of these does.
-    checkout_service.sync_order_to_merchant(order)
-    _post_order_confirmation_to_chat(order, payment)
+        # Tell the seller, and tell the buyer's own conversation. Both are
+        # best-effort on purpose — the payment is already verified and must
+        # stand regardless of what either of these does.
+        checkout_service.sync_order_to_merchant(order)
+        _post_order_confirmation_to_chat(order, payment)
 
     return order, payment
 
@@ -274,16 +273,58 @@ def _fetch_payment_method(payment, provider_payment_id):
         payment.method_detail = detail
 
 
-def _mark_paid_and_confirm(order, payment, provider_payment_id, source: str):
+def _claim_payment(payment) -> bool:
+    """Moves this payment to PAID exactly once, atomically.
+
+    Both callers check "is it already paid?" before acting, but a check and
+    a later write are two steps: the browser callback and the webhook can
+    both pass the check before either commits. That is not theoretical —
+    production shows two confirmation messages written 94ms apart for one
+    order. Making the state transition itself the guard closes it: the
+    conditional UPDATE matches a row only if it is not yet PAID, so exactly
+    one caller sees a rowcount of 1 and goes on to do the follow-up work.
+    """
+    claimed = (
+        db.session.query(Payment)
+        .filter(Payment.id == payment.id, Payment.status != PaymentStatus.PAID)
+        .update(
+            {
+                Payment.status: PaymentStatus.PAID,
+                Payment.paid_at: datetime.now(timezone.utc),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    return claimed == 1
+
+
+def _mark_paid_and_confirm(order, payment, provider_payment_id, source: str) -> bool:
     """The single place a payment becomes PAID and an order CONFIRMED.
 
     Shared by browser verification and the Razorpay webhook so the two can
-    never diverge — whichever arrives first does the work, and the other
-    finds it already done.
+    never diverge. Returns True to exactly one of them — the caller that
+    wins the claim is the one that syncs the merchant and writes the
+    confirmation into the chat, so neither happens twice.
     """
+    if not _claim_payment(payment):
+        # The other path got there first. Nothing more to do here.
+        audit_service.log_event(
+            action="PAYMENT_CONFIRM_RACE",
+            resource_id=order.id,
+            session_id=order.session_id,
+            buyer_clerk_user_id=order.buyer_clerk_user_id,
+            metadata={
+                "order_id": str(order.id),
+                "payment_id": str(payment.id),
+                "source": source,
+                "outcome": "already_confirmed_by_other_path",
+            },
+        )
+        return False
+
+    db.session.refresh(payment)
     payment.provider_payment_id = provider_payment_id
-    payment.status = PaymentStatus.PAID
-    payment.paid_at = datetime.now(timezone.utc)
     _fetch_payment_method(payment, provider_payment_id)
 
     order.status = OrderStatus.CONFIRMED
@@ -319,16 +360,17 @@ def _mark_paid_and_confirm(order, payment, provider_payment_id, source: str):
             "source": source,
         },
     )
+    return True
 
 
 def confirm_payment_from_webhook(order, payment, provider_payment_id):
     """Webhook entry point. Razorpay's own call already proves the payment,
     so there's no client signature to check here — the request itself was
     authenticated by its webhook signature before reaching this."""
-    _mark_paid_and_confirm(order, payment, provider_payment_id, source="webhook")
-    checkout_service.clear_cart_for_order(order)
-    checkout_service.sync_order_to_merchant(order)
-    _post_order_confirmation_to_chat(order, payment)
+    if _mark_paid_and_confirm(order, payment, provider_payment_id, source="webhook"):
+        checkout_service.clear_cart_for_order(order)
+        checkout_service.sync_order_to_merchant(order)
+        _post_order_confirmation_to_chat(order, payment)
     return order, payment
 
 
