@@ -1,178 +1,361 @@
 # Architecture
 
-Two independently deployable services with **separate databases and separate
-auth**, talking over a scoped HTTP API — not a monolith split into folders.
+Agentic Commerce consists of two independently deployable services with **separate databases and separate authentication boundaries**.
 
-That separation is the point of the track: the merchant is transactable by an AI
-buyer *because* the buyer's agent reaches it only through a public, scoped,
-authenticated API. It never queries the merchant's tables.
+The buyer's AI agent interacts with merchants through a scoped, authenticated HTTP API.
+
+It **never directly queries the merchant's database**.
+
+That separation is fundamental to the project: a merchant becomes transactable by an AI buyer because it exposes controlled commerce capabilities rather than giving the agent database access.
 
 ```mermaid
 flowchart TB
+
     subgraph Buyer
-        WEB[Web chat<br/>Next.js · Clerk]
+        WEB[Web Chat<br/>Next.js]
         TG[Telegram<br/>@AgenticCommerceX_bot]
     end
 
-    subgraph AgentSvc["Agent service — buyer side"]
-        API[Flask API<br/>SSE streaming]
-        LOOP[Agent loop<br/>17 tools]
-        ADB[(Postgres<br/>chats · carts · orders<br/>payments · audit)]
+    subgraph AgentSvc["Agent Service - Buyer Side"]
+        API[Flask API<br/>Streaming]
+        LOOP[Agent Loop<br/>17 Tools]
+        ADB[(Postgres<br/>Chats · Carts · Orders<br/>Payments · Audit)]
     end
 
-    subgraph MerchantSvc["Merchant service — seller side"]
+    subgraph MerchantSvc["Merchant Service - Seller Side"]
         MAPI[Flask API]
-        MDB[(Postgres<br/>catalog · orders · stock)]
-        DASH[Dashboard<br/>orders · payments · fulfillment]
+        MDB[(Postgres<br/>Catalog · Orders · Stock)]
+        DASH[Merchant Dashboard]
     end
 
-    RZP[Razorpay<br/>test mode]
+    RZP[Razorpay<br/>Test Mode]
 
     WEB --> API
     TG --> API
+
     API --> LOOP
     LOOP --> ADB
-    LOOP -->|catalog:read · product:read| MAPI
-    LOOP -->|checkout:create<br/>order sync · cancel| MAPI
+
+    LOOP -->|Catalog & Product Access| MAPI
+    LOOP -->|Checkout & Order Sync| MAPI
+
     MAPI --> MDB
     DASH --> MAPI
-    API -->|create order · verify · refund| RZP
-    RZP -->|webhook, signature-verified| API
+
+    API -->|Create Order · Verify · Refund| RZP
+    RZP -->|Verified Webhook| API
 ```
 
-## The payment gate
+---
 
-The single most important path. Note where the human sits.
+## The Payment Gate
+
+The most important boundary in the system is where the human authorizes payment.
 
 ```mermaid
 sequenceDiagram
+
     participant B as Buyer
-    participant A as Agent (LLM)
-    participant S as Agent backend
+    participant A as Agent
+    participant S as Agent Backend
     participant M as Merchant API
     participant R as Razorpay
 
-    B->>A: "add it and checkout"
-    A->>S: add_to_cart · prepare_checkout
-    S->>M: re-read product, price, stock
-    M-->>S: current price + availability
-    S->>M: hold the stock (15 min)
-    S->>S: compute total server-side<br/>require delivery address
-    S-->>B: Pay button (backend's amount)
+    B->>A: "Add it and checkout"
 
-    Note over A,R: The agent has no tool that reaches Razorpay.
+    A->>S: Add to cart / Prepare checkout
 
-    B->>S: presses Pay (authenticated)
-    S->>S: audit USER_PAYMENT_AUTHORIZED
-    S->>R: create order (amount from DB)
-    B->>R: pays in Razorpay's own UI
-    R-->>S: payment id + signature
-    S->>S: verify HMAC-SHA256 itself
-    S->>M: register order, decrement stock
-    S-->>B: PAID · CONFIRMED · receipt
-    R-->>S: webhook (backstop if tab closed)
+    S->>M: Read product, price and stock
+    M-->>S: Current price + availability
+
+    S->>M: Hold stock
+
+    S->>S: Calculate total server-side
+    S->>S: Validate delivery address
+
+    S-->>B: Checkout ready
+
+    Note over A,R: The agent has no tool that can move money.
+
+    B->>S: Explicitly presses Pay
+
+    S->>S: Record USER_PAYMENT_AUTHORIZED
+
+    S->>R: Create Razorpay order
+
+    B->>R: Completes payment in Razorpay UI
+
+    R-->>S: Payment details + signature
+
+    S->>S: Verify HMAC-SHA256
+
+    S->>M: Register merchant order
+    S->>M: Confirm inventory movement
+
+    S-->>B: PAID · CONFIRMED · Receipt
+
+    R-->>S: Webhook confirmation
 ```
 
-**Why a webhook as well as the browser callback:** browser verification only runs
-if the tab is still open. Razorpay's server-to-server call is the authority.
-Both converge on one idempotent function, so whichever arrives first does the
-work and the other finds it done.
+### Why Both Browser Verification and Webhooks?
 
-## Trust boundaries
+The browser callback only works if the buyer remains on the page.
 
-| Boundary | Enforced by |
-|---|---|
-| Model → money | No tool exists that authorizes, captures, retries or confirms a payment |
-| Client → price | Amount computed server-side from a live catalog read; request bodies ignored |
-| Browser → "paid" | HMAC-SHA256 verified in-process before anything is marked `PAID` |
-| Refund size | Read from the stored payment; can't exceed what was captured |
-| Oversell | Holds are taken under a row lock, so concurrent checkouts serialize |
-| Buyer → buyer | Every query scoped by Clerk id; order ids from users are never trusted as lookup keys |
-| Telegram → account | `telegram_user_id → clerk_user_id` mapping; unlinked users get a `tg:` identity owning nothing |
-| Agent → merchant DB | No connection. Scoped API key only. |
+Razorpay's server-to-server webhook provides an additional authoritative confirmation path.
 
-## The agent loop
+Both paths converge on the same **idempotent payment confirmation process**, meaning whichever arrives first completes the operation and the other safely detects that it has already been processed.
 
-A hand-written loop, not a framework runner, so every tool call can be audited and
-every product card sourced from raw tool JSON.
+---
 
-1. Stream a completion with the 17 tool definitions
-2. **Tokens stream to the client as they arrive** — but if a `tool_calls` delta
-   follows text in the same round, a `retract` event withdraws it. Pre-tool
-   narration is never allowed to stand as an answer.
-3. Execute tools, audit each, append results, loop (max 6 rounds)
-4. Persist reply + product cards + suggestions + prepared checkout + tool trace
+# Trust Boundaries
 
-**Product cards are built only from tool results, never parsed from the model's
-prose** — so the agent cannot present a product it didn't actually look up.
+| Boundary                  | Enforcement                                                       |
+| ------------------------- | ----------------------------------------------------------------- |
+| Model → Money             | No agent tool can authorize, capture, retry, or confirm a payment |
+| Client → Price            | Prices are calculated server-side from live merchant data         |
+| Browser → Payment Status  | Razorpay HMAC-SHA256 verification required before `PAID`          |
+| Refund Amount             | Read from stored payment and cannot exceed captured amount        |
+| Overselling               | Inventory holds are acquired atomically                           |
+| Buyer → Buyer             | Queries are scoped to authenticated buyer identity                |
+| Telegram → Account        | Telegram identity is explicitly linked to the buyer account       |
+| Agent → Merchant Database | No database connection; scoped API access only                    |
 
-The model is also grounded in the catalog's real vocabulary — every category and
-brand, with live counts — and is asked to turn a need into constraints rather
-than a search string. Matching a named category or brand is word-exact: plain
-substring matching quietly rotted as the catalog grew, with "car" reaching Hair
-**Care** and "art" reaching Sm**art**phones.
+---
 
-Two provider defences, both from measured behaviour rather than theory:
+# The Agent Loop
 
-- A per-round wall-clock budget enforced through a background thread and a queue,
-  because httpx's timeout doesn't bound a stream that keeps trickling keepalives
-  (observed: a turn hung past 60s with a 20s timeout configured).
-- One automatic retry per round when nothing has reached the client yet
-  (measured: 6.7s, 10.4s, 40.5s and a 500 across four identical calls).
+The agent uses a controlled, hand-written execution loop.
 
-## Data model
+This allows every tool call to be audited and prevents the UI from relying on information invented by the model.
 
-**Agent DB** — `chat_sessions`, `chat_messages` (cards, suggestions, prepared
-checkout, tool trace), `selected_products` (cart), `orders`, `payments`,
-`addresses`, `buyer_profiles`, `telegram_links`, `audit_events`
+### Flow
 
-**Merchant DB** — `merchants`, `stores`, `products`, `product_variants`,
-`product_images`, `categories`, `orders`, `order_items`, `payments`,
-`inventory_movements`, `stock_reservations`, `api_clients` + scopes,
-`audit_events`
+1. Stream the model response with the available tool definitions.
+2. Stream tokens to the client.
+3. Execute requested tools.
+4. Audit every tool call.
+5. Append tool results to the conversation.
+6. Continue until the agent completes its response or reaches the maximum execution limit.
+7. Persist the final response, tool trace, product cards, suggestions, and checkout state.
 
-Deliberate choices:
+The loop is bounded to prevent uncontrolled execution.
 
-- `orders.session_id` is `ON DELETE SET NULL`. **An order is a financial record**
-  — deleting a chat must neither delete it nor be blocked by it.
-- Merchant orders carry a unique `agent_order_id`, making sync idempotent: a
-  retry can't double-create or double-decrement stock.
-- Order line items and addresses are **snapshots**, so later edits never rewrite
-  what was actually bought or where it went.
-- Stock decrements on **verified payment**, not on cart-add — otherwise anyone
-  could drain a merchant's inventory for free.
-- Between the two, a **timed hold** covers the payment window. It is logical:
-  `stock_quantity` still means "units on hand", and availability subtracts
-  unexpired holds. Taking one is atomic under `SELECT … FOR UPDATE`, and expiry
-  is enforced by every read filtering on the timestamp rather than by a sweeper
-  — so an abandoned checkout frees its stock with no job running.
+---
 
-## Failure design
+## Product Grounding
 
-Every external dependency can fail, and each has a defined behaviour:
+Product cards are built directly from **tool results**.
 
-| Dependency | On failure |
-|---|---|
-| LLM provider | Retry once — after a short backoff if it was a 429 — then an honest fallback naming the *model* as the problem |
-| Merchant catalog | Fixed message; never invents products |
-| Razorpay create | Order stays unpaid; buyer told to retry |
-| Razorpay verify | `PAYMENT_FAILED`; order **not** confirmed |
-| Razorpay refund | Cancellation still stands; failure recorded for manual processing |
-| Merchant sync | Never unwinds a paid order; recorded and retryable |
-| Telegram send | HTML falls back to plain text so a reply is never silently dropped |
+They are never extracted from the model's prose.
 
-## Deployment
+This prevents the agent from presenting products it never actually retrieved.
 
-Backends on EC2 (`eu-north-1`) behind nginx with per-subdomain TLS; frontends on
-Vercel; Postgres on Neon (`eu-central-1`).
+The model is also grounded using the merchant's real:
 
-The buyer app serves a public landing page at `/` and the chat at `/chat`; auth
-resolves server-side so the page arrives complete rather than filling in after
-hydration.
+* Categories
+* Brands
+* Product vocabulary
 
-Both databases were moved from `us-east-2` to Frankfurt after measuring **126ms**
-round trips from the app; Frankfurt measured **24ms**. Effect: audit writes
-620ms → 117ms, catalog search 6.5s → 1.9s, chat activity indicator 1.4s → 0.28s.
+User requests are converted into structured constraints whenever possible.
 
-SSE needs `proxy_buffering off` in nginx, and gunicorn's timeout sized above the
-worst-case turn (`MAX_TOOL_ITERATIONS × REQUEST_TIMEOUT_SECONDS`).
+For example:
+
+```text
+"I need a new mobile phone"
+            ↓
+category = Smartphones
+```
+
+---
+
+## Provider Reliability
+
+The agent handles unreliable LLM providers through:
+
+* Per-round execution limits
+* Streaming timeout protection
+* One automatic retry
+* Rate-limit backoff
+* Honest fallback responses
+
+If the model is unavailable, the system explicitly reports that the **AI provider is experiencing problems** rather than incorrectly claiming that the merchant catalog is unavailable.
+
+---
+
+# Data Model
+
+## Agent Database
+
+The Agent service owns:
+
+```text
+chat_sessions
+chat_messages
+selected_products
+orders
+payments
+addresses
+buyer_profiles
+telegram_links
+audit_events
+```
+
+Chat messages store additional agent state including:
+
+* Product cards
+* Suggestions
+* Prepared checkout state
+* Tool traces
+
+---
+
+## Merchant Database
+
+The Merchant service owns:
+
+```text
+merchants
+stores
+products
+product_variants
+product_images
+categories
+orders
+order_items
+payments
+inventory_movements
+stock_reservations
+api_clients
+audit_events
+```
+
+API clients receive explicitly scoped access.
+
+---
+
+# Important Data Decisions
+
+### Orders Outlive Conversations
+
+Orders are financial records.
+
+Deleting a chat session must never delete an order.
+
+---
+
+### Merchant Order Synchronization Is Idempotent
+
+Merchant orders use a unique Agent Order ID.
+
+Retries therefore cannot:
+
+* Create duplicate merchant orders
+* Double-decrement inventory
+
+---
+
+### Orders Store Snapshots
+
+Order items and delivery addresses are stored as snapshots.
+
+Later product or address edits cannot rewrite historical purchases.
+
+---
+
+### Stock Changes Only After Verified Payment
+
+Adding an item to a cart does not reduce merchant inventory.
+
+Inventory is finalized only after verified payment.
+
+During checkout, a temporary hold protects the item from overselling.
+
+```text
+Cart
+  ↓
+No Inventory Change
+
+Checkout
+  ↓
+Temporary Stock Hold
+
+Verified Payment
+  ↓
+Inventory Decrement
+```
+
+---
+
+# Inventory Holds
+
+The system separates:
+
+```text
+Stock On Hand
+        ↓
+Available Stock
+=
+Stock On Hand
+− Active Reservations
+```
+
+Reservations are:
+
+* Time-limited
+* Acquired atomically
+* Protected against concurrent checkout attempts
+
+Expired reservations automatically stop affecting availability.
+
+An abandoned checkout therefore releases inventory without requiring a dedicated cleanup job.
+
+---
+
+# Failure Design
+
+Every external dependency has a defined failure behaviour.
+
+| Dependency               | Failure Behaviour                                                                   |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| LLM Provider             | Retry once, optionally back off after rate limiting, then return an honest fallback |
+| Merchant Catalog         | Never invent products; return a controlled error                                    |
+| Razorpay Order Creation  | Order remains unpaid and buyer can retry                                            |
+| Razorpay Verification    | `PAYMENT_FAILED`; order is not confirmed                                            |
+| Razorpay Refund          | Cancellation remains valid and failure is recorded for manual handling              |
+| Merchant Synchronization | Paid order is preserved; synchronization failure is retryable                       |
+| Telegram Delivery        | Formatting fallback prevents replies from being silently dropped                    |
+
+---
+
+# Core Architectural Principle
+
+```text
+AI Agent
+   │
+   ├── Can search
+   ├── Can recommend
+   ├── Can build carts
+   ├── Can prepare checkout
+   │
+   └── Cannot move money
+              │
+              ▼
+        Explicit Human Action
+              │
+              ▼
+           Razorpay
+              │
+              ▼
+     Server-Side Verification
+              │
+              ▼
+       Order Confirmation
+```
+
+> **The AI agent can operate the shopping workflow.**
+>
+> **The human authorizes payment.**
+>
+> **The backend verifies the result.**
+
+The payment boundary is enforced by the architecture itself, not by asking the model to behave.
