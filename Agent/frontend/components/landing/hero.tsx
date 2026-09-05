@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { Architecture } from "@/components/landing/architecture";
+import { Flow } from "@/components/landing/flow";
 import { Button } from "@/components/ui/button";
 import { useHighlights } from "@/lib/queries/use-highlights";
 
@@ -51,7 +51,7 @@ export function Hero() {
           )}
         </div>
 
-        <Architecture productCount={data?.product_count} />
+        <Flow />
       </div>
     </section>
   );
