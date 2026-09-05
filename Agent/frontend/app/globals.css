@@ -34,6 +34,10 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-agent-1: var(--agent-1);
+  --color-agent-2: var(--agent-2);
+  --color-human: var(--human);
+  --font-display: var(--font-display);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
@@ -48,78 +52,102 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Two accents, and they mean different things.
+
+   Violet through cyan is the AGENT: search, tools, everything it does on
+   its own. Saffron is HUMAN AUTHORITY and appears in exactly one place —
+   the payment boundary, where a person has to act because the agent
+   cannot. Using it anywhere decorative would break the one thing this
+   product is built to say.
+   ───────────────────────────────────────────────────────────────────── */
+
 :root {
-  /* Neutrals carry a trace of blue rather than being dead grey — it keeps
-     large flat surfaces from looking muddy next to the indigo accent. */
-  --background: oklch(0.995 0.002 265);
-  --foreground: oklch(0.18 0.011 265);
+  color-scheme: light;
+
+  --background: oklch(0.985 0.004 265);
+  --foreground: oklch(0.17 0.02 268);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.011 265);
+  --card-foreground: oklch(0.17 0.02 268);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.011 265);
-  /* One accent, used sparingly: the buyer's own messages, primary actions,
-     and focus. Everything else stays monochrome so it means something. */
-  --primary: oklch(0.53 0.183 274);
+  --popover-foreground: oklch(0.17 0.02 268);
+
+  --primary: oklch(0.53 0.213 292);
   --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.968 0.004 265);
-  --secondary-foreground: oklch(0.22 0.012 265);
-  --muted: oklch(0.968 0.004 265);
-  --muted-foreground: oklch(0.52 0.014 265);
-  --accent: oklch(0.962 0.006 270);
-  --accent-foreground: oklch(0.22 0.012 265);
+
+  --secondary: oklch(0.962 0.007 268);
+  --secondary-foreground: oklch(0.24 0.02 268);
+  --muted: oklch(0.962 0.007 268);
+  --muted-foreground: oklch(0.51 0.021 268);
+  --accent: oklch(0.955 0.012 272);
+  --accent-foreground: oklch(0.24 0.02 268);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.912 0.005 265);
-  --input: oklch(0.912 0.005 265);
-  --ring: oklch(0.53 0.183 274);
-  --chart-1: oklch(0.53 0.183 274);
-  --chart-2: oklch(0.556 0.02 265);
-  --chart-3: oklch(0.439 0.018 265);
-  --chart-4: oklch(0.371 0.016 265);
-  --chart-5: oklch(0.269 0.014 265);
-  /* Tighter than the shadcn default: sharp corners read as precise. */
-  --radius: 0.5rem;
-  --sidebar: oklch(0.978 0.003 265);
-  --sidebar-foreground: oklch(0.18 0.011 265);
-  --sidebar-primary: oklch(0.53 0.183 274);
+
+  --border: oklch(0.905 0.009 268);
+  --input: oklch(0.905 0.009 268);
+  --ring: oklch(0.53 0.213 292);
+
+  --radius: 0.75rem;
+
+  /* The agent's own colours, and the one reserved for a person. */
+  --agent-1: oklch(0.53 0.213 292);
+  --agent-2: oklch(0.68 0.148 213);
+  --human: oklch(0.76 0.163 74);
+  --glass: oklch(1 0 0 / 62%);
+  --glass-edge: oklch(1 0 0 / 70%);
+  --halo: oklch(0.53 0.213 292 / 14%);
+
+  --sidebar: oklch(0.972 0.006 268);
+  --sidebar-foreground: oklch(0.17 0.02 268);
+  --sidebar-primary: oklch(0.53 0.213 292);
   --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.955 0.006 270);
-  --sidebar-accent-foreground: oklch(0.22 0.012 265);
-  --sidebar-border: oklch(0.912 0.005 265);
-  --sidebar-ring: oklch(0.53 0.183 274);
+  --sidebar-accent: oklch(0.95 0.012 272);
+  --sidebar-accent-foreground: oklch(0.24 0.02 268);
+  --sidebar-border: oklch(0.905 0.009 268);
+  --sidebar-ring: oklch(0.53 0.213 292);
 }
 
 .dark {
-  --background: oklch(0.162 0.008 265);
-  --foreground: oklch(0.965 0.002 265);
-  --card: oklch(0.198 0.009 265);
-  --card-foreground: oklch(0.965 0.002 265);
-  --popover: oklch(0.205 0.009 265);
-  --popover-foreground: oklch(0.965 0.002 265);
-  --primary: oklch(0.625 0.176 274);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.258 0.011 265);
-  --secondary-foreground: oklch(0.965 0.002 265);
-  --muted: oklch(0.252 0.011 265);
-  --muted-foreground: oklch(0.685 0.013 265);
-  --accent: oklch(0.272 0.013 268);
-  --accent-foreground: oklch(0.965 0.002 265);
+  color-scheme: dark;
+
+  /* Deep blue-black, not a tinted grey standing in for black. */
+  --background: oklch(0.145 0.028 268);
+  --foreground: oklch(0.965 0.006 268);
+  --card: oklch(0.195 0.031 268);
+  --card-foreground: oklch(0.965 0.006 268);
+  --popover: oklch(0.205 0.032 268);
+  --popover-foreground: oklch(0.965 0.006 268);
+
+  --primary: oklch(0.66 0.208 292);
+  --primary-foreground: oklch(0.13 0.03 268);
+
+  --secondary: oklch(0.26 0.032 268);
+  --secondary-foreground: oklch(0.965 0.006 268);
+  --muted: oklch(0.255 0.03 268);
+  --muted-foreground: oklch(0.71 0.026 268);
+  --accent: oklch(0.29 0.043 272);
+  --accent-foreground: oklch(0.965 0.006 268);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 13%);
-  --ring: oklch(0.625 0.176 274);
-  --chart-1: oklch(0.625 0.176 274);
-  --chart-2: oklch(0.6 0.02 265);
-  --chart-3: oklch(0.48 0.018 265);
-  --chart-4: oklch(0.4 0.016 265);
-  --chart-5: oklch(0.3 0.014 265);
-  --sidebar: oklch(0.182 0.009 265);
-  --sidebar-foreground: oklch(0.965 0.002 265);
-  --sidebar-primary: oklch(0.625 0.176 274);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.262 0.012 268);
-  --sidebar-accent-foreground: oklch(0.965 0.002 265);
-  --sidebar-border: oklch(1 0 0 / 9%);
-  --sidebar-ring: oklch(0.625 0.176 274);
+
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.66 0.208 292);
+
+  --sidebar: oklch(0.168 0.03 268);
+  --sidebar-foreground: oklch(0.965 0.006 268);
+  --sidebar-primary: oklch(0.66 0.208 292);
+  --sidebar-primary-foreground: oklch(0.13 0.03 268);
+  --sidebar-accent: oklch(0.27 0.04 272);
+  --sidebar-accent-foreground: oklch(0.965 0.006 268);
+  --sidebar-border: oklch(1 0 0 / 11%);
+  --sidebar-ring: oklch(0.66 0.208 292);
+
+  --agent-1: oklch(0.66 0.208 292);
+  --agent-2: oklch(0.78 0.135 205);
+  --human: oklch(0.8 0.158 74);
+  --glass: oklch(0.24 0.035 268 / 55%);
+  --glass-edge: oklch(1 0 0 / 12%);
+  --halo: oklch(0.66 0.208 292 / 20%);
 }
 
 @layer base {
@@ -131,6 +159,12 @@
     /* Slightly negative tracking at body size is what makes dense UI text
        read as sharp rather than airy. */
     letter-spacing: -0.006em;
+  }
+  /* Display face for headlines only; the app's dense areas stay on Geist. */
+  .font-display {
+    font-family: var(--font-display), var(--font-sans), system-ui, sans-serif;
+    font-variation-settings: "wdth" 92;
+    letter-spacing: -0.03em;
   }
   html {
     @apply font-sans;
@@ -148,9 +182,47 @@
   }
 }
 
+
 @layer utilities {
-  /* A thin, unobtrusive scrollbar — the default one is visually louder than
-     anything it scrolls past here. */
+  /* Frosted panel. The blur is what sells the depth, so it degrades to a
+     solid surface where backdrop-filter isn't supported rather than leaving
+     text floating on a translucent wash. */
+  .glass {
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+  }
+  @supports not (backdrop-filter: blur(1px)) {
+    .glass {
+      background: var(--card);
+    }
+  }
+
+  /* The agent's signature ramp, for text and for edges. */
+  .text-agent-gradient {
+    background: linear-gradient(100deg, var(--agent-1), var(--agent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* A light source behind the hero, placed rather than scattered. */
+  .halo::before {
+    content: "";
+    position: absolute;
+    inset: -30% -10% auto -10%;
+    height: 70%;
+    background: radial-gradient(60% 55% at 50% 40%, var(--halo), transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .perspective-shelf {
+    perspective: 1400px;
+    perspective-origin: 60% 40%;
+  }
+
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
@@ -170,5 +242,17 @@
   }
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
+  }
+}
+
+/* Anyone who asks for less motion gets the layout, not the choreography. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
