@@ -1,6 +1,8 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-const isPublicRoute = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
+// The landing page is the pitch — it has to be readable before anyone has
+// an account. Everything else still requires one.
+const isPublicRoute = createRouteMatcher(["/", "/sign-in(.*)", "/sign-up(.*)"]);
 
 export default clerkMiddleware(async (auth, req) => {
   if (!isPublicRoute(req)) {
