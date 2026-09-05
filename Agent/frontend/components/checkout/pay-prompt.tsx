@@ -78,7 +78,12 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
 
   return (
     <>
-      <div className="rounded-lg border bg-card p-3.5">
+      {/* The warm accent is reserved for the point where a person has to
+          act; it appears nowhere else in the chat. */}
+      <div
+        className="rounded-xl border bg-card p-3.5"
+        style={{ borderColor: "color-mix(in oklch, var(--human), transparent 62%)" }}
+      >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="text-sm font-medium">

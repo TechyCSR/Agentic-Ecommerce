@@ -1,47 +1,69 @@
 "use client";
 
-import { Headphones, Keyboard, Laptop, Sparkles, Watch } from "lucide-react";
+import { Mark } from "@/components/brand/mark";
+import { useHighlights } from "@/lib/queries/use-highlights";
 
-const STARTERS: { icon: React.ComponentType<{ className?: string }>; text: string }[] = [
-  { icon: Headphones, text: "Find headphones under ₹5,000" },
-  { icon: Keyboard, text: "I need a keyboard for programming" },
-  { icon: Watch, text: "Show me wireless earbuds" },
-  { icon: Laptop, text: "Help me choose a laptop" },
+/**
+ * The chat's opening screen.
+ *
+ * Openers are built from the shelves that are actually stocked right now,
+ * so the agent never opens by offering something it would then fail to
+ * find. The fallbacks below only appear if the catalog can't be reached.
+ */
+const FALLBACK_STARTERS = [
+  "What do you sell?",
+  "Show me something under ₹2,000",
+  "Find a gift for someone",
 ];
 
+function openersFor(categories: string[]): string[] {
+  if (categories.length === 0) return FALLBACK_STARTERS;
+
+  // Vary the phrasing: a column of "Browse X" reads as a menu, not a
+  // conversation, and the point is that plain sentences work.
+  const shapes = [
+    (c: string) => `Show me ${c.toLowerCase()}`,
+    (c: string) => `What ${c.toLowerCase()} do you have?`,
+    (c: string) => `Best ${c.toLowerCase()} under ₹5,000`,
+    (c: string) => `Compare two ${c.toLowerCase()}`,
+  ];
+  return categories
+    .slice(0, 4)
+    .map((c, i) => shapes[i % shapes.length](c))
+    .concat("What do you sell?")
+    .slice(0, 5);
+}
+
 export function EmptyState({ onPick }: { onPick: (text: string) => void }) {
+  const { data } = useHighlights();
+  const openers = openersFor(data?.starter_categories ?? []);
+
   return (
-    <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-6 px-4 py-10 text-center">
-      <div className="animate-in fade-in zoom-in-95 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg duration-500">
-        <Sparkles className="size-7" />
-      </div>
-
-      <div className="animate-in fade-in slide-in-from-bottom-2 space-y-1.5 duration-500">
-        <h1 className="text-2xl font-semibold tracking-tight">Shopping Agent</h1>
-        <p className="text-sm text-muted-foreground">
-          Find exactly what you&apos;re looking for — I search the real catalog, compare
-          options, and never make up a product.
-        </p>
-      </div>
-
-      <div className="w-full space-y-2">
-        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Try asking
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {STARTERS.map(({ icon: Icon, text }, i) => (
-            <button
-              key={text}
-              type="button"
-              onClick={() => onPick(text)}
-              style={{ animationDelay: `${i * 60}ms` }}
-              className="animate-in fade-in slide-in-from-bottom-2 group flex items-center gap-2.5 rounded-xl border bg-card/60 px-3.5 py-3 text-left text-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-foreground/20 hover:bg-card hover:shadow-md"
-            >
-              <Icon className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
-              <span className="leading-snug">{text}</span>
-            </button>
-          ))}
+    <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center gap-8 px-5 py-12 text-center">
+      <div className="flex flex-col items-center gap-5">
+        <Mark className="size-12 rounded-2xl" />
+        <div className="space-y-2">
+          <h1 className="font-display text-3xl font-semibold text-balance">
+            What are you looking for?
+          </h1>
+          <p className="mx-auto max-w-[44ch] text-[15px] leading-relaxed text-muted-foreground">
+            Describe it the way you would to a person. Everything shown comes from the
+            live catalog, and only you can authorize a payment.
+          </p>
         </div>
+      </div>
+
+      <div className="flex w-full flex-wrap justify-center gap-2">
+        {openers.map((text) => (
+          <button
+            key={text}
+            type="button"
+            onClick={() => onPick(text)}
+            className="glass rounded-xl px-3.5 py-2 text-sm transition-colors duration-150 hover:border-[color-mix(in_oklch,var(--agent-1),transparent_55%)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {text}
+          </button>
+        ))}
       </div>
     </div>
   );

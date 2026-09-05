@@ -30,7 +30,7 @@ function usefulSuggestions(suggestions: string[] | null | undefined): string[] {
 
 function AssistantAvatar() {
   return (
-    <div className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+    <div className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[linear-gradient(135deg,var(--agent-1),var(--agent-2))] text-white">
       <Sparkles className="size-3" />
     </div>
   );

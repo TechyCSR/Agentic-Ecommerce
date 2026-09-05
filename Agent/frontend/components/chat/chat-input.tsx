@@ -32,8 +32,8 @@ export function ChatInput({
   }
 
   return (
-    <div className="border-t bg-background px-3 py-3 md:px-6">
-      <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-lg border bg-card p-1.5 pl-3 transition-colors duration-150 focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/20">
+    <div className="border-t border-border/60 bg-background/70 px-3 py-3 backdrop-blur-xl md:px-6">
+      <div className="glass mx-auto flex max-w-3xl items-end gap-2 rounded-xl p-1.5 pl-3 transition-colors duration-150 focus-within:border-[color-mix(in_oklch,var(--agent-1),transparent_45%)] focus-within:ring-1 focus-within:ring-primary/25">
         <Textarea
           ref={textareaRef}
           value={value}

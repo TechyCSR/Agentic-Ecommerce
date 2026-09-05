@@ -1,7 +1,9 @@
 "use client";
 
-import { Sparkles } from "lucide-react";
+import Link from "next/link";
 
+import { Mark } from "@/components/brand/mark";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { cn } from "@/lib/utils";
 
 export function AgentHeader({
@@ -12,13 +14,14 @@ export function AgentHeader({
   rightSlot?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b bg-background px-4 py-2 md:px-6">
-      <div className="flex items-center gap-2.5">
-        <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Sparkles className="size-3.5" />
-        </div>
+    <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-background/70 px-4 py-2 backdrop-blur-xl md:px-6">
+      <Link
+        href="/"
+        className="flex items-center gap-2.5 rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <Mark />
         <div className="leading-tight">
-          <p className="text-[13px] font-semibold">Shopping Agent</p>
+          <p className="font-display text-[13px] font-semibold">Shopping Agent</p>
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="relative flex size-1.5">
               {isWorking && (
@@ -31,11 +34,14 @@ export function AgentHeader({
                 )}
               />
             </span>
-            {isWorking ? "Working" : "Online · Ready to help you find the right product"}
+            {isWorking ? "Working" : "Ready — ask for anything on the shelves"}
           </p>
         </div>
+      </Link>
+      <div className="flex items-center gap-2">
+        <ThemeToggle />
+        {rightSlot}
       </div>
-      {rightSlot}
     </div>
   );
 }
