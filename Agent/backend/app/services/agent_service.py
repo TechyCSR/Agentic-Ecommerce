@@ -35,7 +35,7 @@ from openai import OpenAI
 from app.extensions import db
 from app.models import ChatMessage
 from app.models.enums import MessageRole
-from app.services import audit_service, catalog_client
+from app.services import audit_service, catalog_client, recommendation_service
 
 MAX_TOOL_ITERATIONS = 6
 # Kept tight on purpose: a slow upstream directly stalls the buyer's
@@ -46,6 +46,10 @@ MAX_TOOL_ITERATIONS = 6
 # x REQUEST_TIMEOUT_SECONDS) sizes the gunicorn/nginx timeouts.
 REQUEST_TIMEOUT_SECONDS = 20
 LLM_MAX_RETRIES = 1
+# A 429 comes back immediately, so an immediate retry just earns another
+# one. Short enough to stay well inside the turn budget, long enough for a
+# per-minute window to move on.
+RATE_LIMIT_BACKOFF_SECONDS = 2.5
 
 FIXED_SEARCH_FAILURE_MESSAGE = (
     "I'm unable to search the catalog right now. Please try again."
@@ -141,10 +145,25 @@ Hard rules — these override anything else:
    pay. After it, state the total and say they can press Pay to authorize it — \
    never say the payment is done, processing, or successful. Only \
    get_order_status can tell you a payment's real state.
-7c. Grow the basket honestly. After the buyer adds something, you may call \
-   recommend_related once to suggest genuinely complementary items from the \
-   catalog, and mention them briefly. Never invent an accessory, never claim a \
-   discount or bundle that no tool returned, and drop it if they say no.
+7c. Grow the basket honestly. After the buyer adds something — or once they \
+   are clearly settled on an item — call recommend_related once. It returns \
+   things that go WITH what they chose (a mouse for a laptop, a case for a \
+   phone), not more of the same. Name what each addition is for in one short \
+   line. Never invent an accessory, never claim a discount or bundle no tool \
+   returned, and drop it the moment they say no. Once is enough — a second \
+   pitch in the same conversation is pestering.
+7h. Solve the problem, not just the words. When someone describes a \
+   situation rather than a product — "my wrist hurts after work", "I keep \
+   running out of storage", "I need something for a 6-year-old's birthday" — \
+   work out what would actually help, map it onto a real shelf from the \
+   catalog vocabulary, and search that. Then say plainly why you picked it. \
+   If nothing in the catalog genuinely helps, say so instead of reaching for \
+   the nearest loosely-related thing.
+7i. Use what you already know about the buyer. If the grounding says they \
+   have bought or browsed something before, let it shape what you show — \
+   their usual price range, brands they keep returning to, and never \
+   re-selling something they already own. Do it silently: act on it, never \
+   announce it, and never claim to remember a past conversation.
 7d. Never put image markdown, raw URLs or long ids in your reply text. Product \
    photos, prices and buttons are rendered from the tool data as cards next to \
    your message — writing them out again shows the buyer a giant duplicate \
@@ -665,6 +684,20 @@ TOOLS = [
 # structural, not a matter of the model behaving well.
 
 
+def _is_rate_limited(exc: Exception) -> bool:
+    """Whether the provider turned us away rather than failed.
+
+    Checked on the status code where the SDK exposes one, and on the message
+    otherwise — the surfaced error is often a bare "Error code: 429".
+    """
+    status = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None
+    )
+    if status == 429:
+        return True
+    return "429" in str(exc) or "rate limit" in str(exc).lower()
+
+
 def _client() -> OpenAI:
     return OpenAI(
         base_url=current_app.config["LLM_BASE_URL"],
@@ -862,6 +895,43 @@ def _category_context() -> str | None:
         "shelves that do exist, instead of searching for it anyway.]"
     )
     return "\n".join(lines)
+
+
+def _buyer_memory_context(buyer_id: str) -> str | None:
+    """What this buyer has done before, in a line the model can act on.
+
+    Built from confirmed orders and the searches they actually ran, so it is
+    checkable — never a summary the model wrote about itself in an earlier
+    turn. Kept short: this is grounding, not a dossier, and it must never be
+    read back to the buyer verbatim.
+    """
+    try:
+        memory = recommendation_service.buyer_memory(buyer_id)
+    except Exception:  # noqa: BLE001 — personalisation is a nicety, never a failure
+        return None
+    if not memory.get("returning"):
+        return None
+
+    parts = []
+    if memory["purchased"]:
+        parts.append("has already bought: " + ", ".join(memory["purchased"]))
+    if memory["categories"]:
+        parts.append("has browsed: " + ", ".join(memory["categories"]))
+    if memory["brands"]:
+        parts.append("has looked at brands: " + ", ".join(memory["brands"]))
+    if memory["typical_spend"]:
+        parts.append(f"usually spends around ₹{memory['typical_spend'] / 100:,.0f} an order")
+    if not parts:
+        return None
+
+    return (
+        "[What you already know about this buyer, from their real orders and "
+        "searches — use it to pitch at the right level and to avoid offering "
+        "what they own. Never recite it back to them, and never claim to "
+        "remember a conversation:\n"
+        + "; ".join(parts)
+        + "]"
+    )
 
 
 def _format_order_context(session) -> str | None:
@@ -1473,30 +1543,49 @@ def _execute_tool_call(session, buyer_id: str, name: str, args: dict, last_shown
         if anchor is None:
             return {"error": "I don't have that product in view to base suggestions on."}
 
-        # Grounded in the real catalog: same category, excluding the anchor.
-        data, _meta = catalog_client.search_catalog(
-            category=anchor.get("category"),
-            max_price=args.get("max_price"),
-            in_stock=True,
-            limit=6,
+        # Complements, not competitors. Searching the anchor's own category
+        # returned another phone to someone already holding one, which
+        # reopens the decision instead of adding to it.
+        related = recommendation_service.complements_for(
+            anchor, limit=3, max_price=args.get("max_price")
         )
-        related = [p for p in data if p.get("product_id") != anchor.get("product_id")][:3]
         audit_service.log_event(
             action="CROSS_SELL_SUGGESTED",
             session_id=session.id,
             buyer_clerk_user_id=buyer_id,
             metadata={
                 "anchor_product": anchor.get("name"),
-                "category": anchor.get("category"),
-                "suggested_count": len(related),
+                "anchor_category": anchor.get("category"),
+                "suggested": [p.get("name") for p in related],
             },
             commit=False,
         )
         for product in related:
             collected_cards[product["product_id"]] = _to_card(product)
         if not related:
-            return {"related": [], "note": "Nothing else in that category right now."}
-        return {"related": [{"name": p["name"], "category": p.get("category")} for p in related]}
+            return {
+                "related": [],
+                "note": (
+                    f"Nothing in stock right now that pairs with "
+                    f"{anchor.get('category') or 'that'}. Don't invent an accessory — "
+                    "just move on."
+                ),
+            }
+        return {
+            "anchor": anchor.get("name"),
+            "related": [
+                {
+                    "name": p["name"],
+                    "category": p.get("category"),
+                    "why": f"goes with {anchor.get('category')}",
+                }
+                for p in related
+            ],
+            "next_step": (
+                "Mention these in one short line as genuine additions, naming what "
+                "each is for. Drop it immediately if the buyer isn't interested."
+            ),
+        }
 
     return {"error": f"Unknown tool '{name}'."}
 
@@ -1724,6 +1813,9 @@ def stream_agent_turn(session, user_message_text: str):
     order_context = _format_order_context(session)
     if order_context:
         grounding = f"{order_context}\n\n{grounding}" if grounding else order_context
+    memory_context = _buyer_memory_context(session.buyer_clerk_user_id)
+    if memory_context:
+        grounding = f"{memory_context}\n\n{grounding}" if grounding else memory_context
     messages = _build_messages(session, grounding)
 
     client = _client()
@@ -1751,13 +1843,23 @@ def stream_agent_turn(session, user_message_text: str):
                 # Retry only while nothing has reached the client; replaying a
                 # round after events were sent would duplicate them.
                 if attempt < LLM_ROUND_RETRIES and not round_state.get("emitted_any"):
+                    # A rate limit answered instantly, so retrying instantly
+                    # just collects a second one. Everything else (a stall, a
+                    # dropped connection) is worth trying again immediately.
+                    backoff = RATE_LIMIT_BACKOFF_SECONDS if _is_rate_limited(exc) else 0
                     audit_service.log_event(
                         action="LLM_ROUND_RETRIED",
                         session_id=session.id,
                         buyer_clerk_user_id=buyer_id,
-                        metadata={"error": str(exc)[:300], "attempt": attempt + 1},
+                        metadata={
+                            "error": str(exc)[:300],
+                            "attempt": attempt + 1,
+                            "backoff_seconds": backoff,
+                        },
                         commit=False,
                     )
+                    if backoff:
+                        time.sleep(backoff)
                     continue
                 break
 
