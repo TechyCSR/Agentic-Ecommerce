@@ -1,6 +1,6 @@
 "use client";
 
-import { Pause, Play } from "lucide-react";
+import { Ban, Pause, Play, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
@@ -8,62 +8,67 @@ import { cn } from "@/lib/utils";
 /** The four parties. Order matters — it's the horizontal axis of the diagram. */
 const LANES = ["You", "Agent", "Merchant", "Razorpay"] as const;
 
+type Kind = "ask" | "tool" | "reply" | "human" | "blocked";
+
 type Step = {
   from: number;
   to: number;
+  kind: Kind;
   label: string;
-  wire?: string;
-  /** The one hop that cannot happen. */
-  blocked?: boolean;
-  /** Human authority: the buyer acting, not the agent. */
-  human?: boolean;
+  /** The agent's own tool, where one is doing the work. Named because the
+   *  claim this page makes is about which tools exist, not which URLs do. */
+  tool?: string;
 };
 
-/** One real purchase, hop by hop. Every wire here exists in the running
- *  system — the scoped catalog calls, the stock hold, the signature check. */
+/** One real purchase, hop by hop. Every tool named here is in the agent's
+ *  actual tool list; the gap at step 6 is the one that isn't. */
 const STEPS: Step[] = [
-  { from: 0, to: 1, label: "Find me headphones under ₹5,000", human: true },
-  { from: 1, to: 2, label: "Search the catalog", wire: "GET /agent/catalog/search" },
-  { from: 2, to: 1, label: "19 products, live price and stock" },
-  { from: 1, to: 2, label: "Hold the stock for 15 minutes", wire: "POST /agent/reservations" },
-  { from: 1, to: 0, label: "₹4,499, priced on the server. Pay appears." },
-  { from: 1, to: 3, label: "No tool reaches payment", blocked: true },
-  { from: 0, to: 3, label: "You press Pay, in Razorpay's own window", human: true },
-  { from: 3, to: 1, label: "Signature verified on our server" },
-  { from: 1, to: 2, label: "Order registered, stock decremented", wire: "POST /agent/orders" },
+  { from: 0, to: 1, kind: "ask", label: "Find me headphones under ₹5,000" },
+  { from: 1, to: 2, kind: "tool", tool: "search_catalog", label: "Turns the need into constraints and searches" },
+  { from: 2, to: 1, kind: "reply", label: "19 products, live price and stock" },
+  { from: 1, to: 2, kind: "tool", tool: "prepare_checkout", label: "Prices the order and holds the stock for 15 minutes" },
+  { from: 1, to: 0, kind: "reply", label: "₹4,499, computed on the server. A Pay button appears." },
+  { from: 1, to: 3, kind: "blocked", label: "No tool exists that reaches payment" },
+  { from: 0, to: 3, kind: "human", label: "You press Pay, in Razorpay's own window" },
+  { from: 3, to: 1, kind: "reply", label: "Signature verified on our server" },
+  { from: 1, to: 2, kind: "tool", tool: "sync order", label: "Order registered, stock comes down" },
 ];
 
-const DWELL_MS = 2200;
+const DWELL_MS = 2400;
+
+/** number | lanes | description. Shared by the header, the lane overlay and
+ *  every row, so the lifelines stay under their own headings. */
+const ROW = "grid grid-cols-[1.25rem_minmax(8.5rem,1fr)_minmax(0,1.5fr)] items-center gap-x-3";
+
+function colourFor(kind: Kind) {
+  if (kind === "blocked") return "var(--destructive)";
+  if (kind === "human" || kind === "ask") return "var(--human)";
+  return "var(--agent-2)";
+}
 
 export function Flow() {
   const [active, setActive] = useState(0);
-  // Two separate things: whether the viewer wants it running, and whether
-  // the pointer is resting on it. Collapsing them into one flag meant
-  // clicking a step to read it, then moving away, silently resumed and
-  // threw the selection away.
   const [playing, setPlaying] = useState(true);
-  const [hovered, setHovered] = useState(false);
 
   useEffect(() => {
-    if (!playing || hovered) return;
-    // Someone who asked for less motion gets the whole sequence at rest,
-    // still steppable by hand.
+    if (!playing) return;
+    // Anyone who asked for less motion gets the sequence at rest, still
+    // steppable by hand.
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const id = setInterval(() => setActive((i) => (i + 1) % STEPS.length), DWELL_MS);
     return () => clearInterval(id);
-  }, [playing, hovered]);
+  }, [playing]);
 
-  /* The whole assembly tilts as one plane. A previous attempt tilted the
-     cards individually and they collided; moving a single surface keeps
-     every line where it was drawn. */
+  // Tilts as one plane. Tilting the cards individually is what made an
+  // earlier version of this hero slide over its own text.
   const stage = useRef<HTMLDivElement>(null);
 
   function tilt(event: React.PointerEvent<HTMLDivElement>) {
     const el = stage.current;
     if (!el) return;
     const box = el.getBoundingClientRect();
-    el.style.setProperty("--rx", `${-((event.clientY - box.top) / box.height - 0.5) * 5}deg`);
-    el.style.setProperty("--ry", `${((event.clientX - box.left) / box.width - 0.5) * 6}deg`);
+    el.style.setProperty("--rx", `${-((event.clientY - box.top) / box.height - 0.5) * 4}deg`);
+    el.style.setProperty("--ry", `${((event.clientX - box.left) / box.width - 0.5) * 5}deg`);
   }
 
   function level() {
@@ -73,106 +78,112 @@ export function Flow() {
     el.style.setProperty("--ry", "0deg");
   }
 
+  const current = STEPS[active];
+
   return (
-    <div
-      className="relative w-full [perspective:1800px]"
-      onPointerMove={tilt}
-      onPointerLeave={() => {
-        level();
-        setHovered(false);
-      }}
-      onPointerEnter={() => setHovered(true)}
-    >
+    <div className="relative w-full [perspective:1800px]" onPointerMove={tilt} onPointerLeave={level}>
       <div
         ref={stage}
         className="relative rounded-[1.25rem] border border-border/60 bg-card/40 p-2.5 shadow-2xl transition-transform duration-500 ease-out sm:p-3"
         style={{
           ["--rx" as string]: "0deg",
           ["--ry" as string]: "0deg",
-          transformStyle: "preserve-3d",
           transform: "rotateX(var(--rx)) rotateY(var(--ry))",
         }}
       >
         <div className="flex items-center justify-between gap-3 px-1.5 pt-1 pb-2.5">
-          <h2 className="font-display text-[15px] font-semibold">Request Flow</h2>
-          <button
-            type="button"
-            onClick={() => setPlaying((p) => !p)}
-            data-state={playing ? "playing" : "paused"}
-            aria-label={playing ? "Pause the sequence" : "Play the sequence"}
-            className="grid size-7 place-items-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          >
-            {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-          </button>
-        </div>
-
-        <figure className="glass w-full rounded-2xl p-4 sm:p-5">
-      <figcaption className="sr-only">
-        One purchase, hop by hop: the agent searches the merchant&apos;s catalog over a
-        scoped API, holds stock, and prices the order. It has no connection to the
-        payment provider — only you can authorize the payment, after which Razorpay
-        reports the verified result back.
-      </figcaption>
-
-      <p className="pb-3 text-[11px] text-muted-foreground">
-        One purchase, hop by hop — tap a step to hold it
-      </p>
-
-      <div className="min-w-0 overflow-x-auto">
-        <div className="min-w-[19rem]">
-          <div className="ml-6 grid grid-cols-4 border-b border-border/60 pb-2">
-            {LANES.map((lane, i) => (
-              <span
-                key={lane}
-                className={cn(
-                  "text-center text-[11px] font-medium transition-colors duration-200",
-                  STEPS[active].from === i || STEPS[active].to === i
-                    ? "text-foreground"
-                    : "text-muted-foreground/70"
-                )}
-              >
-                {lane}
-              </span>
-            ))}
+          <div>
+            <h2 className="font-display text-[15px] leading-none font-semibold">Request Flow</h2>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              One purchase, hop by hop — tap a step to hold it
+            </p>
           </div>
-
-          <ol className="relative pt-1 pl-6">
-            {/* The lanes themselves, running behind every hop. Inset by the
-                number gutter so each lifeline stays under its heading. */}
-            <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 left-6 grid grid-cols-4">
-              {LANES.map((lane) => (
-                <span key={lane} className="flex justify-center">
-                  <span className="h-full w-px bg-border/70" />
-                </span>
-              ))}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] tabular-nums text-muted-foreground">
+              {active + 1}/{STEPS.length}
             </span>
-
-            {STEPS.map((step, i) => (
-              <Hop
-                key={step.label}
-                step={step}
-                index={i}
-                isActive={i === active}
-                onSelect={() => {
-                  setActive(i);
-                  setPlaying(false);
-                }}
-              />
-            ))}
-          </ol>
+            <button
+              type="button"
+              onClick={() => {
+                // Pressing play from the last step restarts rather than
+                // looping invisibly to the top.
+                if (!playing && active === STEPS.length - 1) setActive(0);
+                setPlaying((p) => !p);
+              }}
+              aria-label={playing ? "Pause the sequence" : "Play the sequence"}
+              className="grid size-7 place-items-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              {playing ? (
+                <Pause className="size-3.5" />
+              ) : active === STEPS.length - 1 ? (
+                <RotateCcw className="size-3.5" />
+              ) : (
+                <Play className="size-3.5" />
+              )}
+            </button>
+          </div>
         </div>
-      </div>
 
-      <p className="min-h-[2.5rem] pt-3 text-[13px] leading-snug">
-        <span className={cn(STEPS[active].blocked ? "text-destructive" : "text-foreground")}>
-          {STEPS[active].label}
-        </span>
-        {STEPS[active].wire && (
-          <span className="ml-2 font-mono text-[11px] text-muted-foreground">
-            {STEPS[active].wire}
-          </span>
-        )}
-      </p>
+        <figure className="glass w-full rounded-2xl p-3 sm:p-4">
+          <figcaption className="sr-only">
+            One purchase, hop by hop: the agent searches the merchant&apos;s catalog over a
+            scoped API and holds stock, but has no tool that reaches the payment provider.
+            Only you can authorize the payment, after which Razorpay reports the verified
+            result back.
+          </figcaption>
+
+          <div className="min-w-0 overflow-x-auto">
+            <div className="min-w-[26rem]">
+              <div className={cn(ROW, "border-b border-border/60 pb-2")}>
+                <span />
+                <span className="grid grid-cols-4">
+                  {LANES.map((lane, i) => (
+                    <span
+                      key={lane}
+                      className={cn(
+                        "text-center text-[11px] font-medium transition-colors duration-200",
+                        current.from === i || current.to === i
+                          ? "text-foreground"
+                          : "text-muted-foreground/60"
+                      )}
+                    >
+                      {lane}
+                    </span>
+                  ))}
+                </span>
+                <span />
+              </div>
+
+              <ol className="relative pt-1">
+                {/* Lifelines, running behind every hop and only under the
+                    lane column. */}
+                <span aria-hidden="true" className={cn(ROW, "pointer-events-none absolute inset-0")}>
+                  <span />
+                  <span className="grid h-full grid-cols-4">
+                    {LANES.map((lane) => (
+                      <span key={lane} className="flex justify-center">
+                        <span className="h-full w-px bg-border/70" />
+                      </span>
+                    ))}
+                  </span>
+                  <span />
+                </span>
+
+                {STEPS.map((step, i) => (
+                  <Hop
+                    key={step.label}
+                    step={step}
+                    index={i}
+                    isActive={i === active}
+                    onSelect={() => {
+                      setActive(i);
+                      setPlaying(false);
+                    }}
+                  />
+                ))}
+              </ol>
+            </div>
+          </div>
         </figure>
       </div>
     </div>
@@ -193,91 +204,105 @@ function Hop({
   const left = Math.min(step.from, step.to);
   const right = Math.max(step.from, step.to);
   const rightward = step.to > step.from;
-
-  const colour = step.blocked
-    ? "var(--destructive)"
-    : step.human
-      ? "var(--human)"
-      : "var(--agent-2)";
+  const colour = colourFor(step.kind);
 
   return (
     <li className="relative">
-      {/* The step number sits outside the lanes, so it reads as an index
-          rather than as another party in the conversation. */}
-      <span
-        aria-hidden="true"
-        className={cn(
-          "pointer-events-none absolute top-1/2 -left-6 w-4 -translate-y-1/2 text-right text-[10px] tabular-nums transition-colors duration-200",
-          isActive ? "font-medium text-foreground" : "text-muted-foreground/50"
-        )}
-      >
-        {index + 1}
-      </span>
       <button
         type="button"
         onClick={onSelect}
         aria-current={isActive ? "step" : undefined}
         aria-label={`Step ${index + 1}: ${step.label}`}
-        className="grid w-full grid-cols-4 items-center rounded-md py-[7px] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        className={cn(
+          ROW,
+          "w-full rounded-lg py-2 text-left transition-colors duration-200",
+          isActive ? "bg-foreground/[0.04]" : "hover:bg-foreground/[0.02]",
+          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        )}
       >
         <span
-          className="flex items-center"
-          style={{ gridColumn: `${left + 1} / ${right + 2}` }}
+          className={cn(
+            "text-right text-[10px] tabular-nums transition-colors duration-200",
+            isActive ? "font-medium text-foreground" : "text-muted-foreground/50"
+          )}
         >
-          {/* Tail dot sits on the sending lane, head on the receiving one. */}
-          <Dot show={!rightward} active={isActive} colour={colour} head />
-          {/* The line, with the request itself running along it while this
-              hop is the live one. */}
-          <span className="relative h-px flex-1">
-            <span
-              className={cn(
-                "absolute inset-0 transition-all duration-300",
-                step.blocked && "opacity-70"
-              )}
-              style={{
-                background: step.blocked
-                  ? `repeating-linear-gradient(90deg, ${colour} 0 4px, transparent 4px 9px)`
-                  : colour,
-                opacity: isActive ? 1 : 0.22,
-              }}
-            />
-            {isActive && (
+          {index + 1}
+        </span>
+
+        <span className="grid grid-cols-4 items-center">
+          <span className="flex items-center" style={{ gridColumn: `${left + 1} / ${right + 2}` }}>
+            <Dot show={!rightward} active={isActive} colour={colour} />
+            <span className="relative h-px flex-1">
               <span
-                aria-hidden="true"
-                className={cn(
-                  "packet",
-                  step.blocked && "packet-blocked",
-                  !step.blocked && !rightward && "packet-reverse"
-                )}
-                style={{ ["--packet" as string]: colour }}
+                className="absolute inset-0 transition-opacity duration-300"
+                style={{
+                  background:
+                    step.kind === "blocked"
+                      ? `repeating-linear-gradient(90deg, ${colour} 0 4px, transparent 4px 9px)`
+                      : colour,
+                  opacity: isActive ? 1 : 0.22,
+                }}
               />
-            )}
+              {isActive && (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "packet",
+                    step.kind === "blocked" && "packet-blocked",
+                    step.kind !== "blocked" && !rightward && "packet-reverse"
+                  )}
+                  style={{ ["--packet" as string]: colour }}
+                />
+              )}
+            </span>
+            <Dot show={rightward} active={isActive} colour={colour} />
           </span>
-          <Dot show={rightward} active={isActive} colour={colour} head />
+        </span>
+
+        <span className="min-w-0">
+          <span
+            className={cn(
+              "block text-[11px] leading-snug transition-colors duration-200",
+              isActive ? "text-foreground" : "text-muted-foreground/70"
+            )}
+          >
+            {step.label}
+          </span>
+          {step.kind === "blocked" ? (
+            <span
+              className="mt-1 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px]"
+              style={{
+                borderColor: `color-mix(in oklch, ${colour}, transparent ${isActive ? "50%" : "78%"})`,
+                color: isActive ? colour : "var(--muted-foreground)",
+              }}
+            >
+              <Ban className="size-2.5" />
+              no such tool
+            </span>
+          ) : step.tool ? (
+            <span
+              className="mt-1 inline-block rounded border px-1.5 py-0.5 font-mono text-[10px]"
+              style={{
+                borderColor: `color-mix(in oklch, ${colour}, transparent ${isActive ? "55%" : "80%"})`,
+                color: isActive ? "var(--foreground)" : "var(--muted-foreground)",
+              }}
+            >
+              {step.tool}
+            </span>
+          ) : null}
         </span>
       </button>
     </li>
   );
 }
 
-function Dot({
-  show,
-  active,
-  colour,
-  head,
-}: {
-  show: boolean;
-  active: boolean;
-  colour: string;
-  head?: boolean;
-}) {
+function Dot({ show, active, colour }: { show: boolean; active: boolean; colour: string }) {
   return (
     <span
       aria-hidden="true"
       className={cn(
-        "size-1.5 shrink-0 rounded-full transition-all duration-300",
-        !show && "opacity-0",
-        active && show && head && "scale-150"
+        "size-1.5 shrink-0 rounded-full transition-transform duration-300",
+        active && show && "scale-150"
       )}
       style={{ background: colour, opacity: show ? (active ? 1 : 0.25) : 0 }}
     />
