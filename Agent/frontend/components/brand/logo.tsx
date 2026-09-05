@@ -1,47 +1,15 @@
-import { useId } from "react";
-
+import { Mark } from "@/components/brand/mark";
 import { cn } from "@/lib/utils";
 
 /**
- * The icon mark: a package outline (commerce) with a solid agent node at
- * its center and a satellite node above it (the agent reaching in).
+ * The wordmark, wherever the product names itself.
+ *
+ * The mark itself lives in one place so the sidebar, the chat header and
+ * the landing nav can't drift apart — the previous version drew its own
+ * SVG with hardcoded indigo hex values, which stopped matching the moment
+ * the palette moved to tokens.
  */
-export function LogoMark({ className }: { className?: string }) {
-  const gradientId = useId();
-
-  return (
-    <svg
-      viewBox="0 0 32 32"
-      fill="none"
-      className={cn("size-7 shrink-0", className)}
-      aria-hidden="true"
-    >
-      <rect width="32" height="32" rx="9" fill={`url(#${gradientId})`} />
-      <path
-        d="M16 7.5 22.5 11v10L16 24.5 9.5 21V11L16 7.5Z"
-        stroke="white"
-        strokeOpacity="0.6"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-      <circle cx="16" cy="16" r="3" fill="white" />
-      <circle cx="16" cy="7.5" r="1.5" fill="white" />
-      <defs>
-        <linearGradient
-          id={gradientId}
-          x1="0"
-          y1="0"
-          x2="32"
-          y2="32"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop stopColor="#6366f1" />
-          <stop offset="1" stopColor="#7c3aed" />
-        </linearGradient>
-      </defs>
-    </svg>
-  );
-}
+export { Mark as LogoMark } from "@/components/brand/mark";
 
 export function Logo({
   className,
@@ -54,13 +22,8 @@ export function Logo({
 }) {
   return (
     <span className={cn("flex items-center gap-2", className)}>
-      <LogoMark className={markClassName} />
-      <span
-        className={cn(
-          "text-lg font-semibold tracking-tight",
-          textClassName
-        )}
-      >
+      <Mark className={markClassName ?? "size-7"} />
+      <span className={cn("font-display text-lg font-semibold", textClassName)}>
         Agentic Commerce
       </span>
     </span>
