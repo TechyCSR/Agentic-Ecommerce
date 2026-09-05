@@ -42,6 +42,7 @@ def register_error_handlers(app):
 
 
 def register_blueprints(app):
+    from app.routes.catalog import bp as catalog_bp
     from app.routes.chat import bp as chat_bp
     from app.routes.checkout import bp as checkout_bp
     from app.routes.health import bp as health_bp
@@ -51,3 +52,4 @@ def register_blueprints(app):
     app.register_blueprint(chat_bp)
     app.register_blueprint(checkout_bp)
     app.register_blueprint(webhooks_bp)
+    app.register_blueprint(catalog_bp)
