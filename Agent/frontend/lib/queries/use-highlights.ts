@@ -4,29 +4,20 @@ import { useQuery } from "@tanstack/react-query";
 
 import { API_URL } from "@/lib/api";
 
-export interface ShowcaseProduct {
-  name: string;
-  brand: string | null;
-  category: string;
-  image_url: string;
-  price: number | null;
-  currency: string;
-}
-
 export interface CatalogHighlights {
-  showcase: ShowcaseProduct[];
   categories: { name: string; product_count: number }[];
   starter_categories: string[];
   brands: string[];
+  product_count: number;
   category_count: number;
   brand_count: number;
 }
 
 const EMPTY: CatalogHighlights = {
-  showcase: [],
   categories: [],
   starter_categories: [],
   brands: [],
+  product_count: 0,
   category_count: 0,
   brand_count: 0,
 };

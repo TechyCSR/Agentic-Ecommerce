@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import { Shelf } from "@/components/landing/shelf";
+import { Architecture } from "@/components/landing/architecture";
 import { Button } from "@/components/ui/button";
 import { useHighlights } from "@/lib/queries/use-highlights";
 
@@ -11,7 +11,7 @@ export function Hero() {
 
   return (
     <section className="halo relative overflow-hidden">
-      <div className="relative z-10 mx-auto grid max-w-6xl items-center gap-12 px-5 py-16 sm:px-8 md:py-24 lg:grid-cols-[1.05fr_1fr] lg:gap-8">
+      <div className="relative z-10 mx-auto grid max-w-6xl items-center gap-12 px-5 py-16 sm:px-8 md:py-24 lg:grid-cols-[0.95fr_1.05fr] lg:gap-10">
         <div>
           <h1 className="font-display text-[2.6rem] leading-[1.03] font-semibold text-balance sm:text-6xl">
             Seventeen tools. None of them can spend your money.
@@ -36,18 +36,22 @@ export function Hero() {
             />
           </div>
 
-          {data && data.category_count > 0 && (
+          {data && data.product_count > 0 && (
             <p className="mt-8 text-sm text-muted-foreground">
               Live right now:{" "}
+              <span className="font-medium text-foreground tabular-nums">
+                {data.product_count.toLocaleString("en-IN")}
+              </span>{" "}
+              products across{" "}
               <span className="font-medium text-foreground tabular-nums">{data.category_count}</span>{" "}
-              shelves stocked by{" "}
+              shelves, from{" "}
               <span className="font-medium text-foreground tabular-nums">{data.brand_count}</span>{" "}
-              real brands, priced in rupees.
+              real brands.
             </p>
           )}
         </div>
 
-        <Shelf products={data?.showcase ?? []} />
+        <Architecture productCount={data?.product_count} />
       </div>
     </section>
   );
