@@ -65,7 +65,7 @@ export default function DashboardPage() {
       )}
 
       <div>
-        <h2 className="mb-4 text-lg font-semibold tracking-tight">Sales</h2>
+        <h2 className="font-display mb-4 text-lg font-semibold">Sales</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             title="Revenue"
@@ -75,6 +75,7 @@ export default function DashboardPage() {
             )}
             icon={IndianRupee}
             hint="From paid orders"
+            money
           />
           <StatCard
             title="Orders Received"

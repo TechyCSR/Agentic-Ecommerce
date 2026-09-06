@@ -12,6 +12,7 @@ import {
 import Link from "next/link";
 
 import { Logo } from "@/components/brand/logo";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -73,12 +74,13 @@ const steps = [
 export default function Home() {
   return (
     <div className="flex flex-1 flex-col">
-      <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur supports-backdrop-filter:bg-background/60">
+      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <Link href="/" aria-label="Agentic Commerce home">
             <Logo />
           </Link>
           <div className="flex items-center gap-3">
+            <ThemeToggle />
             <Show when="signed-out">
               <Button variant="ghost" render={<Link href="/sign-in" />}>
                 Sign in
@@ -110,7 +112,7 @@ export default function Home() {
                 <Sparkles className="size-3 text-indigo-500" />
                 {TAGLINE}
               </div>
-              <h1 className="text-4xl font-bold tracking-tight text-balance sm:text-5xl lg:text-6xl">
+              <h1 className="font-display text-4xl font-semibold text-balance sm:text-5xl lg:text-6xl">
                 The commerce foundation for{" "}
                 <span className="bg-linear-to-br from-indigo-500 to-violet-600 bg-clip-text text-transparent">
                   AI shopping agents
