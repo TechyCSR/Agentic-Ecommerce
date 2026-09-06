@@ -34,7 +34,7 @@ from openai import OpenAI
 
 from app.extensions import db
 from app.models import ChatMessage
-from app.models.enums import MessageRole
+from app.models.enums import MessageRole, OrderStatus, PaymentStatus
 from app.services import audit_service, catalog_client, recommendation_service
 
 MAX_TOOL_ITERATIONS = 6
@@ -934,24 +934,40 @@ def _buyer_memory_context(buyer_id: str) -> str | None:
     )
 
 
+# Payment outcomes worth telling the agent about. A checkout that was
+# priced and never attempted is noise — the buyer can still see its Pay
+# button, and naming it invites the agent to talk about an order that
+# doesn't really exist yet.
+_SETTLED_PAYMENTS = {PaymentStatus.PAID, PaymentStatus.FAILED, PaymentStatus.REFUNDED}
+
+
 def _format_order_context(session) -> str | None:
-    """Recent orders for this chat, so the agent knows a purchase happened
-    without having to be asked. Status only — the tool is still the way to
-    get details, and nothing here lets it move money."""
+    """Orders in this chat that actually reached a payment outcome.
+
+    Read from the orders table rather than the transcript, which is what
+    makes it survive an edit or a regenerate: those truncate messages, and
+    the "order confirmed" message can go with them, but the order itself is
+    a financial record and stays. Without this the agent would cheerfully
+    offer to check out again for something already paid for.
+
+    Status only — get_order_status is still the way to get details, and
+    nothing here lets the agent move money.
+    """
     from app.models import Order  # local import keeps model imports lazy here
 
     orders = (
         Order.query.filter_by(session_id=session.id)
         .order_by(Order.created_at.desc())
-        .limit(3)
+        .limit(8)
         .all()
     )
-    if not orders:
-        return None
 
     lines = []
     for o in orders:
         payment = o.latest_payment()
+        settled = payment is not None and payment.status in _SETTLED_PAYMENTS
+        if not settled and o.status not in (OrderStatus.CONFIRMED, OrderStatus.CANCELLED):
+            continue
         amount = o.amount_total / 100
         symbol = "₹" if o.currency == "INR" else f"{o.currency} "
         lines.append(
@@ -959,10 +975,20 @@ def _format_order_context(session) -> str | None:
             f"{o.status.value if o.status else 'UNKNOWN'}, payment "
             f"{payment.status.value if payment and payment.status else 'NONE'}"
         )
+        if len(lines) >= 3:
+            break
+
+    if not lines:
+        return None
+
     return (
-        "[Context — this buyer's orders in this chat. Use get_order_status for "
-        "details or delivery status; never state a payment outcome that isn't "
-        "shown here or in a tool result:\n" + "\n".join(lines) + "]"
+        "[Context — orders in this chat that have already been paid, refunded "
+        "or failed. These are financial records and remain true even if the "
+        "conversation above was edited and no longer mentions them. Never "
+        "offer to check out or pay for one of these again, and never state a "
+        "payment outcome that isn't shown here or in a tool result:\n"
+        + "\n".join(lines)
+        + "]"
     )
 
 
