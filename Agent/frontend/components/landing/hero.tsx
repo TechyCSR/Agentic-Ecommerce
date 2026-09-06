@@ -51,7 +51,13 @@ export function Hero() {
           )}
         </div>
 
-        <Flow />
+        {/* Desktop only. The trace needs four lanes and a description
+            column to be readable at all, and on a phone that collapses into
+            a horizontally-scrolling box nobody scrolls — better to show
+            nothing than something unreadable. */}
+        <div className="hidden lg:block">
+          <Flow />
+        </div>
       </div>
     </section>
   );
