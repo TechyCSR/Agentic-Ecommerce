@@ -14,15 +14,30 @@ export function AgentHeader({
   isWorking: boolean;
   rightSlot?: React.ReactNode;
 }) {
+  const { data } = useHighlights();
+
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-background/70 px-4 py-2 backdrop-blur-xl md:px-6">
-      <Link
-        href="/"
-        className="flex items-center gap-2.5 rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-      >
-        <Mark />
-        <div className="leading-tight">
-          <p className="font-display text-[13px] font-semibold">Shopping Agent</p>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <Link
+          href="/"
+          aria-label="Agentic Commerce home"
+          className="rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <Mark />
+        </Link>
+
+        <div className="min-w-0 leading-tight">
+          <div className="flex items-center gap-2">
+            <Link
+              href="/"
+              className="font-display truncate text-[13px] font-semibold hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              Shopping Agent
+            </Link>
+            <CatalogSize />
+          </div>
+
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="relative flex size-1.5">
               {isWorking && (
@@ -35,12 +50,18 @@ export function AgentHeader({
                 )}
               />
             </span>
-            {isWorking ? "Working" : "Ready — ask for anything on the shelves"}
+            <span className="truncate">
+              {isWorking
+                ? "Working on it"
+                : data?.category_count
+                  ? `Ready to search ${data.category_count} shelves`
+                  : "Ready when you are"}
+            </span>
           </p>
         </div>
-      </Link>
-      <div className="flex items-center gap-2">
-        <CatalogSize />
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2">
         <ThemeToggle />
         {rightSlot}
       </div>
@@ -49,11 +70,10 @@ export function AgentHeader({
 }
 
 /**
- * How much is actually on the shelves right now.
+ * How much is actually on the shelves, beside the name it belongs to.
  *
- * Read from the live catalog rather than hardcoded, and hidden until it
- * arrives — a "0 products" flash on every load would say the opposite of
- * what this is for.
+ * Live rather than a fixed figure, and hidden until it arrives — a "0
+ * products" flash on every load would say the opposite of what this is for.
  */
 function CatalogSize() {
   const { data } = useHighlights();
@@ -61,13 +81,13 @@ function CatalogSize() {
 
   return (
     <span
-      className="hidden items-center gap-1.5 rounded-md border border-border/70 px-2.5 py-1 text-[11px] text-muted-foreground sm:flex"
-      title={`${data.category_count} categories from ${data.brand_count} brands`}
+      className="hidden shrink-0 items-center gap-1 rounded-md border border-border/70 px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline-flex"
+      title={`${data.category_count} categories from ${data.brand_count} brands, updated live`}
     >
-      <span className="tabular-nums font-medium text-foreground">
+      <span className="font-medium tabular-nums text-foreground">
         {data.product_count.toLocaleString("en-IN")}
       </span>
-      products available
+      products
     </span>
   );
 }

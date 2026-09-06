@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { ProductDetailDialog } from "@/components/chat/product-detail-dialog";
 import { ProductImage } from "@/components/chat/product-image";
+import { StoreBadge } from "@/components/chat/store-badge";
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/money";
 import type { ProductCard as ProductCardType } from "@/lib/types";
@@ -65,17 +66,25 @@ export function ProductCardView({
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 text-xs">
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                hasStock ? "bg-emerald-500" : "bg-muted-foreground/50"
-              )}
-            />
-            <span className={hasStock ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}>
-              {hasStock ? "In stock" : "Out of stock"}
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <span className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  hasStock ? "bg-emerald-500" : "bg-muted-foreground/50"
+                )}
+              />
+              <span className={hasStock ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}>
+                {hasStock ? "In stock" : "Out of stock"}
+              </span>
             </span>
           </div>
+
+          <StoreBadge
+            storeName={product.store_name}
+            merchantName={product.merchant_name}
+            className="w-fit"
+          />
 
           <div className="mt-auto grid grid-cols-2 gap-2 pt-1">
             <Button variant="outline" size="sm" onClick={() => setDetailOpen(true)}>
