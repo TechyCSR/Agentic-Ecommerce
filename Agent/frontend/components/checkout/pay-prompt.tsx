@@ -1,13 +1,13 @@
 "use client";
 
-import { Clock, Lock, PackageCheck, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Clock, Lock, PackageCheck, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { CheckoutDialog } from "@/components/checkout/checkout-dialog";
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/money";
 import { useOrder } from "@/lib/queries/use-orders";
-import type { PreparedCheckout } from "@/lib/types";
+import type { Order, PreparedCheckout } from "@/lib/types";
 
 /**
  * Counts down the merchant's stock hold.
@@ -58,12 +58,18 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
   // Dismissing only hides the card — the order stays payable from Orders,
   // so choosing 'later' never quietly abandons it.
   const [dismissed, setDismissed] = useState(false);
-  const { data: order } = useOrder(open ? checkout.order_id : undefined);
+  // Fetched whether or not the dialog is open. Gating this on `open` meant
+  // that closing the dialog after paying disabled the query, `order` went
+  // undefined, and the card fell back to offering "Pay" for something
+  // already paid for.
+  const { data: order } = useOrder(checkout.order_id);
   const holdSeconds = useHoldSecondsLeft(checkout.stock_reserved_until);
 
   const paid = order?.payment_status === "PAID";
 
-  if (dismissed && !paid) {
+  if (paid) return <PaidCard checkout={checkout} order={order} />;
+
+  if (dismissed) {
     return (
       <button
         type="button"
@@ -86,9 +92,7 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-sm font-medium">
-              {paid ? "Payment complete" : "Ready when you are"}
-            </p>
+            <p className="text-sm font-medium">Ready when you are</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {checkout.items.length} item{checkout.items.length === 1 ? "" : "s"} ·{" "}
               <span className="font-semibold text-foreground">
@@ -97,19 +101,17 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {!paid && (
-              <Button variant="ghost" size="sm" onClick={() => setDismissed(true)}>
-                <Clock className="size-3.5" />
-                Later
-              </Button>
-            )}
-            <Button size="sm" disabled={paid} onClick={() => setOpen(true)}>
+            <Button variant="ghost" size="sm" onClick={() => setDismissed(true)}>
+              <Clock className="size-3.5" />
+              Later
+            </Button>
+            <Button size="sm" onClick={() => setOpen(true)}>
               <Lock className="size-3.5" />
-              {paid ? "Paid" : `Pay ${formatMoney(checkout.amount, checkout.currency)}`}
+              Pay {formatMoney(checkout.amount, checkout.currency)}
             </Button>
           </div>
         </div>
-        {!paid && holdSeconds !== null && (
+        {holdSeconds !== null && (
           <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <PackageCheck className="size-3 shrink-0" />
             {holdSeconds > 0 ? (
@@ -136,5 +138,46 @@ export function PayPrompt({ checkout }: { checkout: PreparedCheckout }) {
         <CheckoutDialog order={order} open={open} onOpenChange={setOpen} />
       )}
     </>
+  );
+}
+
+/**
+ * What the card becomes once the money has actually moved.
+ *
+ * Settled state, not a disabled button: nothing here can be clicked back
+ * into a payment, and the amount shown is the order's own total rather than
+ * whatever the card was created with.
+ */
+function PaidCard({ checkout, order }: { checkout: PreparedCheckout; order?: Order }) {
+  const total = order
+    ? formatMoney(order.amount_total, order.currency)
+    : formatMoney(checkout.amount, checkout.currency);
+  const paidAt = order?.confirmed_at ? new Date(order.confirmed_at) : null;
+
+  return (
+    <div
+      className="rounded-xl border bg-card p-3.5"
+      style={{ borderColor: "color-mix(in oklch, var(--agent-2), transparent 62%)" }}
+    >
+      <div className="flex items-start gap-2.5">
+        <CheckCircle2
+          className="mt-0.5 size-4 shrink-0"
+          style={{ color: "var(--agent-2)" }}
+        />
+        <div className="min-w-0">
+          <p className="text-sm font-medium">Paid — {total}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {checkout.items.length} item{checkout.items.length === 1 ? "" : "s"}
+            {order?.status ? ` · ${order.status.toLowerCase()}` : ""}
+            {paidAt
+              ? ` · ${paidAt.toLocaleString(undefined, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                })}`
+              : ""}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
