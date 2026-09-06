@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { Mark } from "@/components/brand/mark";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { useHighlights } from "@/lib/queries/use-highlights";
 import { cn } from "@/lib/utils";
 
 export function AgentHeader({
@@ -39,9 +40,34 @@ export function AgentHeader({
         </div>
       </Link>
       <div className="flex items-center gap-2">
+        <CatalogSize />
         <ThemeToggle />
         {rightSlot}
       </div>
     </div>
+  );
+}
+
+/**
+ * How much is actually on the shelves right now.
+ *
+ * Read from the live catalog rather than hardcoded, and hidden until it
+ * arrives — a "0 products" flash on every load would say the opposite of
+ * what this is for.
+ */
+function CatalogSize() {
+  const { data } = useHighlights();
+  if (!data || data.product_count === 0) return null;
+
+  return (
+    <span
+      className="hidden items-center gap-1.5 rounded-md border border-border/70 px-2.5 py-1 text-[11px] text-muted-foreground sm:flex"
+      title={`${data.category_count} categories from ${data.brand_count} brands`}
+    >
+      <span className="tabular-nums font-medium text-foreground">
+        {data.product_count.toLocaleString("en-IN")}
+      </span>
+      products available
+    </span>
   );
 }
