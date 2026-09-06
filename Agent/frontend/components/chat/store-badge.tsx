@@ -45,20 +45,20 @@ export function StoreBadge({
             : `${name} isn't answering right now.`
       }
       className={cn(
-        "group/store inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 px-1.5 py-0.5",
-        "text-[11px] text-muted-foreground transition-colors duration-150",
-        "hover:border-foreground/25 hover:text-foreground",
+        "group/store inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1",
+        "text-xs font-medium text-foreground/85 transition-colors duration-150",
+        "hover:border-foreground/40 hover:bg-muted hover:text-foreground",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         className
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      <span className="relative flex size-3.5 shrink-0 items-center justify-center">
-        <Store className="size-3" />
+      <span className="relative flex size-4 shrink-0 items-center justify-center">
+        <Store className="size-3.5" />
         <span
           aria-hidden="true"
           className={cn(
-            "absolute -top-0.5 -right-0.5 size-1.5 rounded-full ring-2 ring-card",
+            "absolute -top-1 -right-1 size-2 rounded-full ring-2 ring-card",
             unknown ? "bg-muted-foreground/40" : live ? "bg-emerald-500" : "bg-destructive"
           )}
         />

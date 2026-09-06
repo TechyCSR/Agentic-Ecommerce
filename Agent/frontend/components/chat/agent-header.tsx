@@ -81,10 +81,10 @@ function CatalogSize() {
 
   return (
     <span
-      className="hidden shrink-0 items-center gap-1 rounded-md border border-border/70 px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline-flex"
+      className="hidden shrink-0 items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground sm:inline-flex"
       title={`${data.category_count} categories from ${data.brand_count} brands, updated live`}
     >
-      <span className="font-medium tabular-nums text-foreground">
+      <span className="text-sm font-semibold tabular-nums text-foreground">
         {data.product_count.toLocaleString("en-IN")}
       </span>
       products
