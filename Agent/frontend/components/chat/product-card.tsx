@@ -5,7 +5,6 @@ import { useState } from "react";
 
 import { ProductDetailDialog } from "@/components/chat/product-detail-dialog";
 import { ProductImage } from "@/components/chat/product-image";
-import { StoreBadge } from "@/components/chat/store-badge";
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/money";
 import type { ProductCard as ProductCardType } from "@/lib/types";
@@ -79,12 +78,6 @@ export function ProductCardView({
               </span>
             </span>
           </div>
-
-          <StoreBadge
-            storeName={product.store_name}
-            merchantName={product.merchant_name}
-            className="w-fit"
-          />
 
           <div className="mt-auto grid grid-cols-2 gap-2 pt-1">
             <Button variant="outline" size="sm" onClick={() => setDetailOpen(true)}>

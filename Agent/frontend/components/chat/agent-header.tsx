@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import { Mark } from "@/components/brand/mark";
+import { StoreBadge } from "@/components/chat/store-badge";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { useHighlights } from "@/lib/queries/use-highlights";
 import { cn } from "@/lib/utils";
@@ -62,6 +63,7 @@ export function AgentHeader({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        <StoreBadge compact />
         <ThemeToggle />
         {rightSlot}
       </div>

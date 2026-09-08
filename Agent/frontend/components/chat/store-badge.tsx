@@ -20,13 +20,17 @@ export function StoreBadge({
   storeName,
   merchantName,
   className,
+  /** Icon and status only — for the navbar, where there is no room for a
+   *  name and the store is the same one for every product anyway. */
+  compact = false,
 }: {
   storeName?: string | null;
   merchantName?: string | null;
   className?: string;
+  compact?: boolean;
 }) {
   const { data, isPending, isError } = useHighlights();
-  const name = storeName || merchantName;
+  const name = storeName || merchantName || (compact ? "Merchant store" : null);
   if (!name) return null;
 
   const live = Boolean(data && data.product_count > 0);
@@ -45,10 +49,12 @@ export function StoreBadge({
             : `${name} isn't answering right now.`
       }
       className={cn(
-        "group/store inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1",
-        "text-xs font-medium text-foreground/85 transition-colors duration-150",
-        "hover:border-foreground/40 hover:bg-muted hover:text-foreground",
+        "group/store inline-flex max-w-full items-center rounded-md border border-border text-foreground/85",
+        "transition-colors duration-150 hover:border-foreground/40 hover:bg-muted hover:text-foreground",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+        compact
+          ? "size-9 justify-center"
+          : "gap-1.5 bg-muted/40 px-2 py-1 text-xs font-medium",
         className
       )}
       onClick={(e) => e.stopPropagation()}
@@ -63,7 +69,7 @@ export function StoreBadge({
           )}
         />
       </span>
-      <span className="truncate">{name}</span>
+      {!compact && <span className="truncate">{name}</span>}
       <span className="sr-only">
         {unknown ? "Store status unknown" : live ? "Store is live" : "Store is not responding"}
       </span>
