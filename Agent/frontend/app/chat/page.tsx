@@ -144,7 +144,11 @@ export default function ChatPage() {
   const showEmptyState = !activeId || (messages.length === 0 && !stream.isStreaming && !stream.error);
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden">
+    /* Fixed rather than h-dvh: as an in-flow child it could still let the
+       document grow past the viewport, which left the composer floating
+       mid-page with a band of empty background beneath it. Taking the shell
+       out of flow makes it exactly the viewport, always. */
+    <div className="fixed inset-0 flex w-full overflow-hidden">
       <ProfileSync />
       <DeepLinkCheckout />
       <SessionSidebar {...sidebarProps} />
