@@ -1,0 +1,26 @@
+{
+	"command": "python3 run.py",
+	"build_path": "./",
+	"stack": "python_3_12",
+	"env_variables": {
+		"FLASK_ENV": "production",
+		"FLASK_APP": "run.py",
+		"SECRET_KEY": "your-secret-key",
+		"DATABASE_URL": "postgresql://user:pass@host/db?sslmode=require",
+		"CLERK_SECRET_KEY": "sk_live_xxx",
+		"CLERK_ISSUER": "https://clerk.merchant.yourdomain.com",
+		"CLERK_JWKS_URL": "https://clerk.merchant.yourdomain.com/.well-known/jwks.json",
+		"CLOUDINARY_CLOUD_NAME": "your-cloud-name",
+		"CLOUDINARY_API_KEY": "your-api-key",
+		"CLOUDINARY_API_SECRET": "your-api-secret",
+		"API_KEY_SECRET": "your-api-key-secret",
+		"API_KEY_PREFIX": "ac_live_",
+		"ADMIN_EMAIL": "admin@yourdomain.com",
+		"ADMIN_PASSWORD": "admin-password",
+		"ADMIN_JWT_SECRET": "admin-jwt-secret",
+		"STOCK_RESERVATION_TTL_MINUTES": "15",
+		"FRONTEND_ORIGIN": "https://merchant.yourdomain.com"
+	},
+	"memory": 512,
+	"scripts": {}
+}
