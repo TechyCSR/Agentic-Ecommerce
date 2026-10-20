@@ -1,6 +1,8 @@
 # --- Backend (Python/Flask) ---
 backend/.venv/
 backend/venv/
+backend/lib/
+backend/app-config.json
 backend/__pycache__/
 backend/**/__pycache__/
 backend/*.pyc

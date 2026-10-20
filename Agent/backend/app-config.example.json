@@ -1,0 +1,29 @@
+{
+	"command": "python3 run.py",
+	"build_path": "./",
+	"stack": "python_3_12",
+	"env_variables": {
+		"FLASK_ENV": "production",
+		"FLASK_APP": "run.py",
+		"SECRET_KEY": "your-secret-key",
+		"DATABASE_URL": "postgresql://user:pass@host/db?sslmode=require",
+		"CLERK_ISSUER": "https://clerk.agent.yourdomain.com",
+		"CLERK_JWKS_URL": "https://clerk.agent.yourdomain.com/.well-known/jwks.json",
+		"MERCHANT_AGENT_API_URL": "https://merchant-backend.development.catalystappsail.in",
+		"MERCHANT_AGENT_API_KEY": "ac_test_xxx",
+		"LLM_BASE_URL": "https://ollama.com/v1",
+		"LLM_API_KEY": "your-llm-api-key",
+		"LLM_MODEL": "gemma4:31b-cloud",
+		"FRONTEND_ORIGIN": "https://agent.yourdomain.com",
+		"RAZORPAY_KEY_ID": "rzp_test_xxx",
+		"RAZORPAY_KEY_SECRET": "your-razorpay-secret",
+		"MAX_ORDER_AMOUNT": "0",
+		"RAZORPAY_WEBHOOK_SECRET": "your-webhook-secret",
+		"TELEGRAM_BOT_TOKEN": "your-telegram-token",
+		"TELEGRAM_WEBHOOK_SECRET": "your-telegram-webhook-secret",
+		"AGENT_WEB_URL": "https://agent.yourdomain.com",
+		"STOCK_RESERVATION_TTL_MINUTES": "15"
+	},
+	"memory": 512,
+	"scripts": {}
+}

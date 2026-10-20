@@ -1,0 +1,22 @@
+{
+  "appsail": [
+    {
+      "source": "Agent/backend",
+      "name": "agent-backend",
+      "ignore": [
+        ".venv",
+        ".ruff_cache",
+        "__pycache__"
+      ]
+    },
+    {
+      "source": "Merchant/backend",
+      "name": "merchant-backend",
+      "ignore": [
+        ".venv",
+        ".ruff_cache",
+        "__pycache__"
+      ]
+    }
+  ]
+}

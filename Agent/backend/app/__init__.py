@@ -1,3 +1,4 @@
+import os
 from flask import Flask
 
 from app.config import get_config
@@ -12,10 +13,21 @@ def create_app():
 
     db.init_app(app)
     migrate.init_app(app, db)
-    cors.init_app(
-        app,
-        resources={r"/api/*": {"origins": app.config.get("FRONTEND_ORIGIN", "*")}},
-    )
+
+    # In Zoho Catalyst, the ZGS edge gateway handles CORS for whitelisted domains.
+    # Emitting CORS headers from Flask causes duplicate headers ("multiple values but only one is allowed"),
+    # which browsers reject. So we let ZGS handle CORS when running in Catalyst.
+    if os.getenv("X_ZOHO_CATALYST_LISTEN_PORT"):
+        @app.after_request
+        def remove_backend_cors_headers(response):
+            response.headers.pop("Access-Control-Allow-Origin", None)
+            response.headers.pop("access-control-allow-origin", None)
+            return response
+    else:
+        cors.init_app(
+            app,
+            resources={r"/api/*": {"origins": app.config.get("FRONTEND_ORIGIN", "*")}},
+        )
 
     register_error_handlers(app)
     register_blueprints(app)
