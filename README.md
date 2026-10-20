@@ -1,159 +1,183 @@
 # Agentic Commerce
 
-> **An autonomous AI shopping agent that can do everything up to — but never past — the point of payment.**
+> An autonomous AI shopping agent that can do everything up to — but never past — the point of payment.
 
-| Component | Web App | Backend API |
+| Application | Live URL | Purpose |
 | :--- | :--- | :--- |
-| **Buyer Experience** | [agent.techycsr.dev](https://agent.techycsr.dev) | [agentapi.techycsr.dev](https://agentapi.techycsr.dev) |
-| **Merchant Dashboard** | [merchant.techycsr.dev](https://merchant.techycsr.dev) | [merchantapi.techycsr.dev](https://merchantapi.techycsr.dev) |
+| **Buyer App** | [agent.techycsr.dev](https://agent.techycsr.dev) | Conversational AI shopping interface, cart building, and checkout |
+| **Merchant Console** | [merchant.techycsr.dev](https://merchant.techycsr.dev) | Store management, product catalog, inventory holds, and order telemetry |
 
 ---
 
-## Why Agentic Commerce?
+## The Problem with Conversational Commerce Today
 
-Traditional e-commerce websites are built for human eyeballs: visual banners, dropdown menus, filters, and pagination. LLMs struggle to browse them reliably, scrape them accurately, or handle real stock constraints.
+Most existing "AI shopping assistants" fall into one of two traps:
 
-On the other hand, giving an AI autonomous access to your credit card is a security nightmare. A single hallucination or prompt injection could drain a bank account in seconds.
+1. **They are affiliate link generators:** They recommend products from static knowledge, hallucinate discontinued items, or dump web links onto the user without knowing whether the product is actually in stock.
+2. **They are dangerous:** Prototypes that give autonomous agents direct access to credit cards or wallet balances create unacceptable financial risk. A single prompt injection, semantic confusion, or model hallucination can trigger unauthorized transactions.
 
-**Agentic Commerce solves both problems:**
+Real e-commerce systems require strict guarantees: inventory must not be oversold, prices must be validated against a database rather than trusted from an LLM prompt, and money must never move without explicit, cryptographic human authorization.
 
-1. **An Agent-Native Catalog:** Merchants expose machine-readable, scoped endpoints with real-time stock, variants, and price facets.
-2. **An Autonomous Shopping Agent:** Discovers, compares, recommends, and holds stock across multiple merchants in a single conversational cart.
-3. **A Code-Enforced Payment Boundary:** The AI prepares everything, but **only the human clicks Pay**.
-
-The live demo catalog includes **700+ products, 1,500+ variants, 46 categories, and 6 distinct stores** — all searchable and purchasable in one flow.
+Agentic Commerce is an end-to-end implementation of an e-commerce ecosystem designed from the ground up for autonomous AI agents, built with deterministic backend guards and hard trust boundaries.
 
 ---
 
-## The Golden Rule: 17 Tools, Zero Money Privileges
+## Core System Architecture
+
+The architecture separates the agent's exploratory reasoning from financial execution. The agent operates within a restricted tool runtime, while financial mutations occur exclusively inside an isolated transaction pipeline.
 
 ```text
-       Buyer (Human)
-             │
-             ▼
+       Buyer (Human User)
+               │
+               ▼
       AI Shopping Agent
-   (17 Agent Tools & Logic)
-             │
-  ┌──────────┴──────────┐
-  │  • Search Catalog   │
-  │  • Compare Specs    │
-  │  • Recommend Items  │
-  │  • Hold Stock       │
-  │  • Build Cart       │
-  │  • Save Address     │
-  └──────────┬──────────┘
-             ▼
-    Checkout Prepared
-             │
-   ══════════╪══════════  ◄── HARD TRUST BOUNDARY (Enforced in Code)
-             │
-      Buyer Presses "Pay"
-             │
-             ▼
-     Razorpay Checkout
-             │
-             ▼
-  Backend Verifies Signature
-             │
-             ▼
-       Order Settled
+   (17 Sandboxed Agent Tools)
+               │
+   ┌───────────┴───────────┐
+   │ • Search Catalog      │
+   │ • Filter by Facets    │
+   │ • Compare Specs       │
+   │ • Hold Stock          │
+   │ • Build Multi-Store   │
+   │   Unified Cart        │
+   │ • Validate Address    │
+   └───────────┬───────────┘
+               ▼
+      Checkout Prepared
+   (Immutable Draft Created)
+               │
+   ════════════╪════════════  ◄── HARD TRUST BOUNDARY (Enforced at Code Level)
+               │
+        Human Reviews &
+       Explicitly Pays
+               │
+               ▼
+       Razorpay Gateway
+    (Client Modal / 3DS)
+               │
+               ▼
+   Backend Cryptographic Check
+   (HMAC-SHA256 Signature)
+               │
+               ▼
+     Order State: SETTLED
+  (Inventory Permanently Deducted)
 ```
 
-The agent can look up items, check inventory, build carts, and verify if an order succeeded.
+### The Trust Boundary
 
-**What the agent can NEVER do:**
-* It cannot charge a card.
-* It cannot mark an order as paid.
-* It cannot bypass price verification.
+The agent has **17 tools**, but not one of them can initiate a payment, mark an order as paid, or modify product prices:
 
-This isn't just a system prompt asking the model to *"please be careful with money"*. **There is literally no API route, tool, or database permission that allows the AI to initiate a financial transaction.**
-
----
-
-## Key Features
-
-### 🛒 Multi-Merchant Unified Cart
-A single conversation can find headphones from Store A and a laptop sleeve from Store B. The agent compiles them into one checkout and splits them into distinct merchant orders under the hood.
-
-### ⏱️ Atomic Inventory Reservations (No Overselling)
-When you proceed toward checkout, the backend places a **temporary 15-minute inventory hold**.
-If multiple buyers try to purchase the very last unit of a product at once:
-* Exactly **1 buyer** secures the hold.
-* The others are gracefully informed that stock is currently reserved.
-* If a cart is abandoned, the reservation expires automatically and stock returns to the pool.
-
-### 🔍 Constraint-Based Search & Discovery
-Instead of simple keyword matching, the agent understands categories, price bounds, brands, and availability filters via structured merchant APIs.
-
-### 💡 Context-Aware Recommendations
-Bought a DSLR camera? The agent proactively highlights compatible lenses, memory cards, and cleaning kits that fit your cart.
-
-### 🧾 Transparent "Money Trail"
-Every money-adjacent action emits an immutable audit event visible in the UI:
-> *Cart created → Price validated from database → Stock held → Order drafted → Buyer authorized → Payment signature verified → Settled.*
+* **No Financial Write Paths:** The agent has zero API routes, database models, or tools capable of initiating a charge or overriding payment verification.
+* **Server-Authoritative Pricing:** Prices are re-fetched directly from the merchant database during order preparation. The LLM's conversational output is never trusted as the source of truth for amounts.
+* **Cryptographic Verification:** Orders transition to `PAID` exclusively when the backend verifies Razorpay's HMAC-SHA256 signature against the shared secret.
 
 ---
 
-## Defensive Engineering & Failure Handling
+## State Machine: Lifecycle of an Agentic Purchase
 
-We designed the system assuming that networks fail, models hallucinate, and users test edge cases:
-
-| Failure Scenario | Defensive System Behavior |
-| :--- | :--- |
-| **Forged Payment Signature** | Rejected cryptographically. The status remains unpaid. |
-| **Two Buyers, One Unit** | Atomic DB locks guarantee zero double-selling. |
-| **Price Tampering in Client** | The backend ignores client prices and re-reads directly from the merchant DB. |
-| **LLM Provider Outage** | Exponential backoff followed by a structured fallback response. |
-| **Merchant Service Downtime** | If already paid, the order remains safe in queue and retries merchant sync. |
-| **Order Over Limit** | Blocked server-side before checkout can initialize. |
-
----
-
-## Architecture Overview
-
-The system consists of two independent backend services communicating with Next.js frontends:
+Every transaction follows a deterministic, seven-stage state machine:
 
 ```text
-┌────────────────────────┐      ┌────────────────────────┐
-│      Buyer Frontend    │      │   Merchant Dashboard   │
-│   (Next.js / Tailwind) │      │  (Next.js / Analytics) │
-└───────────┬────────────┘      └───────────┬────────────┘
-            │                               │
-            ▼                               ▼
-┌────────────────────────┐      ┌────────────────────────┐
-│     agent-backend      │◄────►│    merchant-backend    │
-│  • Agent Orchestrator  │ API  │  • Scoped Agent APIs   │
-│  • SSE Chat Streaming  │ Key  │  • Inventory Holds     │
-│  • Payment Verification│      │  • Multi-Store Catalog │
-└───────────┬────────────┘      └───────────┬────────────┘
-            │                               │
-            └───────────────┬───────────────┘
-                            ▼
-              ┌───────────────────────────┐
-              │  Serverless PostgreSQL    │
-              │  (Neon DB with Pooling)   │
-              └───────────────────────────┘
+[DISCOVERY] ──► [SELECTION] ──► [RESERVATION] ──► [CHECKOUT_DRAFT]
+                                                        │
+                                                        ▼
+[FULFILLED] ◄── [SETTLED] ◄── [VERIFICATION] ◄── [HUMAN_AUTHORIZATION]
 ```
 
-* **Backend Services:** Built with Flask & Gunicorn on Python 3.12.
-* **Database:** Serverless Neon PostgreSQL with connection pooling.
-* **Authentication:** Clerk for both buyer and merchant identity.
-* **Media Assets:** Cloudinary CDN for product imagery.
+1. **Discovery:** The agent queries merchant endpoints using structured facets (category slugs, brand constraints, price ranges, and in-stock booleans).
+2. **Selection:** The buyer selects variants. The agent tracks items, quantities, and store origins in a unified cart session.
+3. **Reservation:** When checkout approaches, the backend requests a temporary 15-minute hold on the selected SKU variants using database row-level locking.
+4. **Checkout Draft:** The backend compiles items across stores, applies currency rules, verifies delivery details, and generates a immutable draft order.
+5. **Human Authorization:** The UI renders the final order summary. The buyer explicitly clicks "Pay".
+6. **Verification:** The Razorpay modal processes the charge. The payment payload is posted to the backend, which cryptographically verifies the signature before updating the state.
+7. **Settlement:** Stock is permanently deducted, inventory holds are cleared, and separate fulfillment tickets are routed to each respective merchant.
 
 ---
 
-## Getting Started Locally
+## Deep Technical Capabilities
 
-### 1. Clone the repository
+### Multi-Merchant Unified Cart
+A buyer can ask for items from completely different stores in the same chat (e.g., milk from a grocery store and wireless earbuds from an electronics merchant). The agent constructs a single composite checkout. Upon settlement, the backend automatically partitions the order into separate merchant fulfillments with independent fulfillment IDs.
+
+### Atomic Inventory Reservations
+To prevent race conditions when multiple buyers or agents target the same limited stock, the system uses an atomic reservation model:
+* A database transaction executes `SELECT stock_on_hand, stock_held FROM product_variants WHERE id = :id FOR UPDATE`.
+* Available inventory is computed dynamically as:
+  $$\text{Available Stock} = \text{stock\_on\_hand} - \text{stock\_held}$$
+* If stock is available, `stock_held` is incremented and an expiration timestamp (TTL = 15 minutes) is assigned.
+* If a buyer abandons checkout, a periodic background worker releases expired holds automatically, making the stock immediately available again without human intervention.
+
+### Full Telemetry & The Money Trail
+Every action leaves an immutable record in the audit log (`AuditEvent`). Buyers and merchants can inspect the exact reasoning trail behind every purchase:
+```text
+Session Initiated ──► Catalog Searched [query="cow milk", facets={category: "Dairy"}]
+                  ──► Variant Identified [SKU="COW-MILK-500ML", price=24900]
+                  ──► Stock Held [qty=1, expires_in=900s]
+                  ──► Order Created [order_id="ord_98f1...", total=24900 INR]
+                  ──► Buyer Authorized [method="card", gateway="razorpay"]
+                  ──► Signature Verified [signature_match=true]
+                  ──► Order Settled
+```
+
+### Defensive Error Handling
+
+| Edge Case | System Response |
+| :--- | :--- |
+| **Forged Signature** | Webhook and client verification calculate expected HMAC-SHA256 signature. Mismatch raises `PaymentVerificationError` and logs a security incident. |
+| **Concurrent Last-Unit Race** | Row locks ensure only one transaction acquires the inventory hold. The second transaction immediately receives an out-of-stock response. |
+| **Model Hallucination** | If the LLM generates a non-existent variant ID, the tool validation layer rejects the call before hitting the database. |
+| **Network Timeout During Hold** | Holds have an explicit TTL. If connectivity drops, unfinalized reservations lapse safely without strand inventory. |
+| **Merchant Service Partition** | If a merchant service is temporarily unreachable during sync, the verified paid order remains secure in the local database and retries sync idempotently. |
+
+---
+
+## System Components & Stack
+
+The codebase is structured as a monorepo containing two decoupled microservices and two frontends:
+
+```text
+Agentic-Ecommerce/
+├── Agent/
+│   ├── frontend/         # Next.js 14 App Router (Buyer Chat Interface)
+│   └── backend/          # Python 3.12 / Flask (Agent Logic, Tool Runtime, Checkout)
+├── Merchant/
+│   ├── frontend/         # Next.js 14 App Router (Merchant Operations & Analytics)
+│   └── backend/          # Python 3.12 / Flask (Catalog Engine, Inventory Holds, APIs)
+└── catalyst.json         # Infrastructure & container runtime configuration
+```
+
+* **AI Agent Engine:** LLM orchestration with streaming Server-Sent Events (SSE) and deterministic tool dispatch.
+* **Backend Services:** Python 3.12, Flask, Gunicorn WSGI with multi-worker concurrency, and SQLAlchemy 2.0.
+* **Database:** Serverless PostgreSQL via Neon with connection pooling and pre-ping health checks.
+* **Authentication:** Clerk for session tokens, JWT validation, and role-based access.
+* **Media & Assets:** Cloudinary CDN for product image storage and transformations.
+* **Payment Integration:** Razorpay Test Mode with server-side signature verification.
+
+---
+
+## Local Development Setup
+
+### Prerequisites
+* Python 3.12+
+* Node.js 18+ and npm
+* PostgreSQL instance (local or Neon connection URL)
+
+### 1. Clone Repository
 ```bash
 git clone https://github.com/techycsr/Agentic-Ecommerce.git
 cd Agentic-Ecommerce
 ```
 
-### 2. Configure Environment
-Set up `.env` files in `Agent/backend/` and `Merchant/backend/` using the provided `.env.example` templates.
+### 2. Configure Environment Variables
+Copy the template `.env.example` files to `.env` in both backend directories:
+```bash
+cp Agent/backend/.env.example Agent/backend/.env
+cp Merchant/backend/.env.example Merchant/backend/.env
+```
+Fill in your database URL, Clerk keys, and payment credentials.
 
-### 3. Start Backend Services
+### 3. Run Backend Microservices
 ```bash
 # Terminal 1: Merchant Backend
 cd Merchant/backend
@@ -168,17 +192,25 @@ pip install -r requirements.txt
 python3 run.py
 ```
 
-### 4. Start Frontends
+### 4. Run Frontend Applications
 ```bash
-# Terminal 3: Agent Frontend
-cd Agent/frontend && npm install && npm run dev
+# Terminal 3: Buyer Experience App
+cd Agent/frontend
+npm install
+npm run dev
 
-# Terminal 4: Merchant Frontend
-cd Merchant/frontend && npm install && npm run dev
+# Terminal 4: Merchant Dashboard
+cd Merchant/frontend
+npm install
+npm run dev
 ```
+
+The Buyer App will be live at `http://localhost:3000` and the Merchant Dashboard at `http://localhost:3001`.
 
 ---
 
-> **AI can search, compare, and assemble the cart.**  
-> **Only a human can authorize money to move.**  
-> *That boundary is absolute.*
+## Project Principles
+
+1. **Deterministic Over Generative:** Use the LLM for language comprehension and discovery; use deterministic code and ACID database transactions for prices, stock, and checkouts.
+2. **Explicit Human Consent:** No money moves without human authorization. The boundary between recommendation and purchase is inviolable.
+3. **Graceful Degradation:** When APIs disconnect, models timeout, or stock sells out, the system fails cleanly with structured explanations instead of infinite loops.
