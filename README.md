@@ -1,16 +1,14 @@
 # Agentic Commerce
 
-> **An AI shopping agent that can do everything up to - but never past - the point of payment.**
+> **An autonomous AI shopping agent that can do everything up to — but never past — the point of payment.**
 
-**Razorpay AI Buildathon · Track 01: AI Growth & Agentic Commerce**
-
-|                    |                                                            |
-| ------------------ | ---------------------------------------------------------- |
-| Buyer App          | [agent.techycsr.dev](https://agent.techycsr.dev)           |
-| Merchant Dashboard | [merchant.techycsr.dev](https://merchant.techycsr.dev)     |
-| Telegram           | [@AgenticCommerceX_bot](https://t.me/AgenticCommerceX_bot) |
-| Buyer API          | `agentapi.techycsr.dev`                                    |
-| Merchant API       | `merchantapi.techycsr.dev`                                 |
+| Service            | Production / Custom Domain                                  | Catalyst AppSail Endpoint                                                       |
+| ------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Buyer App          | [agent.techycsr.dev](https://agent.techycsr.dev)            | —                                                                               |
+| Merchant Dashboard | [merchant.techycsr.dev](https://merchant.techycsr.dev)      | —                                                                               |
+| Telegram Bot       | [@AgenticCommerceX_bot](https://t.me/AgenticCommerceX_bot)  | —                                                                               |
+| Buyer API          | `agentapi.techycsr.dev`                                     | [`agent-backend`](https://agent-backend-50046493714.development.catalystappsail.in) |
+| Merchant API       | `merchantapi.techycsr.dev`                                  | [`merchant-backend`](https://merchant-backend-50046493714.development.catalystappsail.in) |
 
 ---
 
@@ -210,7 +208,7 @@ Guests can browse products, while account-specific actions such as checkout and 
 
 ---
 
-## Built for Razorpay AI Buildathon - Track 01
+## Core Capabilities
 
 ### AI Growth & Agentic Commerce
 
@@ -241,6 +239,18 @@ Agentic Commerce addresses both goals:
 * Inventory protection
 * Auditable money trail
 * Graceful failure handling
+
+---
+
+## Cloud Infrastructure & Deployment
+
+The backend services run on **Zoho Catalyst AppSail** (managed Python 3.12 runtime):
+
+* **`agent-backend` AppSail Service:** Shopping agent engine, SSE streaming chat, Razorpay checkout verification, and Telegram bot webhook.
+* **`merchant-backend` AppSail Service:** Multi-store merchant catalog, agent search endpoints, and atomic inventory hold management.
+* **Production Concurrency:** Dynamic Gunicorn WSGI workers bound to Catalyst's `X_ZOHO_CATALYST_LISTEN_PORT`.
+* **Database & Media:** Serverless Neon PostgreSQL (pooled connections) and Cloudinary CDN for product assets.
+* **API Gateway & CORS:** Zoho Catalyst Gateway (ZGS) with authorized origin validation.
 
 ---
 
